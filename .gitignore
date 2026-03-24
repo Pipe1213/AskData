@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Local environments
+backend/.venv/
+
+# Local config
+backend/.env
+.env
+.codex/
+
+# Documentation
+docs/
+AGENTS.md
+
+# Frontend
+node_modules/
+.next/

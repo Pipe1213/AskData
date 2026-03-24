@@ -1,0 +1,14 @@
+{
+  "examples": [
+    "Which 10 customers spent the most in total?",
+    "What are the top 10 film categories by total revenue?",
+    "How many rentals happened each month?",
+    "Which store generated more revenue?",
+    "What is the average payment amount by film rating?",
+    "Which films were rented the most?",
+    "Which customers have not rented anything in the last 30 days?",
+    "What are the top 5 cities by number of customers?",
+    "Compare average rental duration by category.",
+    "How much revenue did each staff member process?"
+  ]
+}
