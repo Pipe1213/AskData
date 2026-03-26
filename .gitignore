@@ -19,3 +19,7 @@ AGENTS.md
 # Frontend
 node_modules/
 .next/
+frontend/.env
+frontend/.env.local
+frontend/.env.development.local
+frontend/.env.production.local

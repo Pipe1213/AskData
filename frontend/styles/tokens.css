@@ -1,0 +1,15 @@
+:root {
+  --color-canvas: #f6eee3;
+  --color-panel: rgba(255, 251, 246, 0.82);
+  --color-panel-strong: rgba(255, 247, 239, 0.96);
+  --color-ink: #231a13;
+  --color-muted: #62574b;
+  --color-line: #e2d1bd;
+  --color-accent: #b14c22;
+  --color-accent-soft: #f7e4d7;
+  --color-success: #2f7a56;
+  --color-info: #2f5f8f;
+  --font-sans: "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
+  --font-serif: "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+  --font-mono: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+}

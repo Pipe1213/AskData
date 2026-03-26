@@ -1,5 +1,6 @@
 from functools import lru_cache
 
+from pydantic import AliasChoices
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -24,6 +25,11 @@ class Settings(BaseSettings):
     postgres_db: str = Field(default="pagila", alias="POSTGRES_DB")
     postgres_user: str = Field(default="postgres", alias="POSTGRES_USER")
     postgres_password: str = Field(default="postgres", alias="POSTGRES_PASSWORD")
+
+    cors_allowed_origins: list[str] = Field(
+        default=["http://127.0.0.1:3000", "http://localhost:3000"],
+        validation_alias=AliasChoices("CORS_ALLOWED_ORIGINS", "ASKDATA_CORS_ALLOWED_ORIGINS"),
+    )
 
     openai_api_key: str | None = Field(default=None, alias="OPENAI_API_KEY")
     openai_model: str = Field(default="gpt-5-mini", alias="OPENAI_MODEL")

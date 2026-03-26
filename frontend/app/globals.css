@@ -1,0 +1,69 @@
+@import "../styles/tokens.css";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: var(--font-sans);
+  color: var(--color-ink);
+  background:
+    radial-gradient(circle at top left, rgba(250, 172, 92, 0.16), transparent 28%),
+    radial-gradient(circle at 85% 8%, rgba(42, 107, 163, 0.12), transparent 18%),
+    linear-gradient(180deg, #f6eee3 0%, #efe2d2 100%);
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+::selection {
+  background: rgba(180, 84, 34, 0.18);
+}
+
+@layer components {
+  .shell {
+    @apply mx-auto w-full max-w-[1360px] px-5 py-6 md:px-8 md:py-8;
+  }
+
+  .panel {
+    @apply rounded-[28px] border border-line bg-panel shadow-soft backdrop-blur;
+  }
+
+  .panel-strong {
+    @apply rounded-[28px] border border-line bg-panelStrong shadow-soft;
+  }
+
+  .section-title {
+    @apply font-serif text-[1.3rem] leading-tight text-ink md:text-[1.55rem];
+  }
+
+  .section-copy {
+    @apply text-sm leading-6 text-muted md:text-[0.98rem];
+  }
+
+  .eyebrow {
+    @apply inline-flex items-center gap-2 rounded-full border border-accent bg-accentSoft px-3 py-1 text-[0.72rem] font-semibold uppercase tracking-[0.16em] text-accent;
+  }
+
+  .chip {
+    @apply inline-flex items-center rounded-full border border-line bg-white/80 px-3 py-1 text-xs font-medium text-muted;
+  }
+}
