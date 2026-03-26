@@ -4,8 +4,14 @@ export type ChartRecommendation = {
   y?: string | null;
 };
 
+export type ConversationMessage = {
+  role: "user" | "assistant";
+  content: string;
+};
+
 export type QueryRequest = {
   question: string;
+  conversation_context?: ConversationMessage[];
 };
 
 export type QueryResponse = {
@@ -27,6 +33,25 @@ export type QueryErrorResponse = {
   };
   warnings: string[];
 };
+
+export type ConversationTurn =
+  | {
+      id: string;
+      question: string;
+      status: "loading";
+    }
+  | {
+      id: string;
+      question: string;
+      status: "success";
+      response: QueryResponse;
+    }
+  | {
+      id: string;
+      question: string;
+      status: "error";
+      error: QueryErrorResponse;
+    };
 
 export type ExampleQuestion = {
   question: string;

@@ -18,7 +18,7 @@ export function AppHeader() {
             href="/"
             className="rounded-full border border-line bg-white/75 px-4 py-2 text-sm font-medium text-ink transition hover:border-accent hover:text-accent"
           >
-            Workspace
+            Chat
           </Link>
           <Link
             href="/schema"

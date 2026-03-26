@@ -9,6 +9,32 @@ from app.schemas.retrieval import (
 )
 from app.utils.text import significant_tokens
 
+REVENUE_TOKENS = {"revenue", "sale", "sales", "spend", "spent", "earning", "earnings"}
+CATEGORY_TOKENS = {"category", "genre"}
+CUSTOMER_TOKENS = {"customer", "customers"}
+STAFF_TOKENS = {"staff", "employee", "employees"}
+RENTAL_TOKENS = {"rental", "rentals", "rented", "rent"}
+TIME_TOKENS = {"date", "dates", "trend", "monthly", "month", "daily", "yearly", "time", "year", "day"}
+
+SEMANTIC_TABLE_HINTS: dict[str, set[str]] = {
+    "payment": REVENUE_TOKENS | {"amount", "total", "totals", "sales"},
+    "customer": CUSTOMER_TOKENS | {"buyer", "buyers"},
+    "staff": STAFF_TOKENS,
+    "rental": RENTAL_TOKENS | TIME_TOKENS,
+    "inventory": {"inventory", "stock"} | CATEGORY_TOKENS,
+    "film_category": CATEGORY_TOKENS,
+    "category": CATEGORY_TOKENS,
+}
+
+SEMANTIC_COLUMN_HINTS: dict[str, set[str]] = {
+    "amount": REVENUE_TOKENS | {"amount", "total", "totals"},
+    "payment_date": TIME_TOKENS | REVENUE_TOKENS,
+    "rental_date": TIME_TOKENS | RENTAL_TOKENS,
+    "customer_id": CUSTOMER_TOKENS,
+    "staff_id": STAFF_TOKENS,
+    "name": CATEGORY_TOKENS | {"customer", "staff"},
+}
+
 
 class RetrievalService:
     def retrieve_schema_context(
@@ -35,16 +61,29 @@ class RetrievalService:
 
             matched_description_tokens = question_tokens & description_tokens
             table_scores[table.full_name] += len(matched_description_tokens) * 1.0
+            table_scores[table.full_name] += self._semantic_table_boost(table, question_tokens)
 
             for column in table.columns:
                 column_tokens = significant_tokens(column.name.replace("_", " "))
                 matched_column_tokens = question_tokens & column_tokens
 
                 if not matched_column_tokens:
+                    semantic_column_boost = self._semantic_column_boost(column.name, question_tokens)
+                    if semantic_column_boost <= 0:
+                        continue
+
+                    column_scores[table.full_name][column.name] += semantic_column_boost
+                    table_scores[table.full_name] += semantic_column_boost * 0.8
                     continue
 
-                column_scores[table.full_name][column.name] += len(matched_column_tokens) * 1.5
-                table_scores[table.full_name] += len(matched_column_tokens) * 1.5
+                direct_column_boost = len(matched_column_tokens) * 1.5
+                semantic_column_boost = self._semantic_column_boost(column.name, question_tokens)
+                total_column_boost = direct_column_boost + semantic_column_boost
+
+                column_scores[table.full_name][column.name] += total_column_boost
+                table_scores[table.full_name] += total_column_boost
+
+        self._apply_composite_intent_boosts(schema, question_tokens, table_scores, column_scores)
 
         expanded_scores = self._expand_scores_with_relationships(schema, table_scores)
         ranked_tables = self._rank_tables(schema, expanded_scores, column_scores, max_tables, max_columns_per_table)
@@ -154,6 +193,7 @@ class RetrievalService:
         )
 
         selected: list[RetrievedColumn] = []
+        selected_names: set[str] = set()
         for column in scored_columns:
             column_score = per_column_scores.get(column.name, 0.0)
 
@@ -167,9 +207,27 @@ class RetrievalService:
                     score=round(column_score, 3),
                 )
             )
+            selected_names.add(column.name)
 
             if len(selected) >= max_columns_per_table:
                 break
+
+        for column_name in self._required_support_columns(table):
+            if len(selected) >= max_columns_per_table or column_name in selected_names:
+                continue
+
+            column = next((candidate for candidate in table.columns if candidate.name == column_name), None)
+            if column is None:
+                continue
+
+            selected.append(
+                RetrievedColumn(
+                    name=column.name,
+                    data_type=column.data_type,
+                    score=round(per_column_scores.get(column.name, 0.0), 3),
+                )
+            )
+            selected_names.add(column.name)
 
         return selected
 
@@ -231,3 +289,105 @@ class RetrievalService:
             warnings.append("The schema match is somewhat ambiguous across multiple tables.")
 
         return warnings
+
+    def _semantic_table_boost(
+        self,
+        table: TableMetadata,
+        question_tokens: set[str],
+    ) -> float:
+        hint_tokens = SEMANTIC_TABLE_HINTS.get(table.table_name, set())
+        return len(question_tokens & hint_tokens) * 2.2
+
+    def _semantic_column_boost(
+        self,
+        column_name: str,
+        question_tokens: set[str],
+    ) -> float:
+        hint_tokens = SEMANTIC_COLUMN_HINTS.get(column_name, set())
+        return len(question_tokens & hint_tokens) * 1.8
+
+    def _apply_composite_intent_boosts(
+        self,
+        schema: DatabaseSchema,
+        question_tokens: set[str],
+        table_scores: dict[str, float],
+        column_scores: dict[str, dict[str, float]],
+    ) -> None:
+        schema_table_map = {table.table_name: table for table in schema.tables}
+
+        if question_tokens & REVENUE_TOKENS and question_tokens & CATEGORY_TOKENS:
+            self._boost_tables(
+                schema_table_map,
+                table_scores,
+                ["payment", "rental", "inventory", "film_category", "category"],
+                amount=5.5,
+            )
+            self._boost_columns(column_scores, "public.payment", ["amount"], amount=4.5)
+
+        if question_tokens & REVENUE_TOKENS and question_tokens & CUSTOMER_TOKENS:
+            self._boost_tables(
+                schema_table_map,
+                table_scores,
+                ["payment", "customer"],
+                amount=6.5,
+            )
+            self._boost_columns(column_scores, "public.payment", ["amount", "customer_id"], amount=3.8)
+
+        if question_tokens & REVENUE_TOKENS and question_tokens & STAFF_TOKENS:
+            self._boost_tables(
+                schema_table_map,
+                table_scores,
+                ["payment", "staff"],
+                amount=6.2,
+            )
+            self._boost_columns(column_scores, "public.payment", ["amount", "staff_id"], amount=4.0)
+
+        if question_tokens & RENTAL_TOKENS and question_tokens & TIME_TOKENS:
+            self._boost_tables(
+                schema_table_map,
+                table_scores,
+                ["rental"],
+                amount=3.5,
+            )
+            self._boost_columns(column_scores, "public.rental", ["rental_date"], amount=4.0)
+
+    def _boost_tables(
+        self,
+        schema_table_map: dict[str, TableMetadata],
+        table_scores: dict[str, float],
+        table_names: list[str],
+        amount: float,
+    ) -> None:
+        for table_name in table_names:
+            table = schema_table_map.get(table_name)
+            if table is None:
+                continue
+            table_scores[table.full_name] += amount
+
+    def _boost_columns(
+        self,
+        column_scores: dict[str, dict[str, float]],
+        table_full_name: str,
+        column_names: list[str],
+        amount: float,
+    ) -> None:
+        for column_name in column_names:
+            column_scores[table_full_name][column_name] += amount
+
+    def _required_support_columns(self, table: TableMetadata) -> list[str]:
+        required_columns: list[str] = []
+
+        for column_name in table.primary_key:
+            if column_name not in required_columns:
+                required_columns.append(column_name)
+
+        for foreign_key in table.foreign_keys:
+            for column_name in foreign_key.source_columns:
+                if column_name not in required_columns:
+                    required_columns.append(column_name)
+
+        for preferred_column in ("amount", "payment_date", "rental_date", "name"):
+            if any(column.name == preferred_column for column in table.columns) and preferred_column not in required_columns:
+                required_columns.append(preferred_column)
+
+        return required_columns

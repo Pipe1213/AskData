@@ -29,3 +29,19 @@ def test_retrieval_builds_prompt_context(sample_schema) -> None:
 
     assert "Table: public.payment" in prompt_context
     assert "Relationships:" in prompt_context
+
+
+def test_retrieval_boosts_payment_for_customer_spend_questions(sample_schema) -> None:
+    service = RetrievalService()
+
+    context = service.retrieve_schema_context(
+        "Which customers spent the most in total?",
+        sample_schema,
+    )
+
+    assert context.tables
+    payment_table = next((table for table in context.tables if table.table_name == "payment"), None)
+    assert payment_table is not None
+    selected_column_names = {column.name for column in payment_table.selected_columns}
+    assert "amount" in selected_column_names
+    assert "customer_id" in selected_column_names

@@ -17,6 +17,7 @@ def run_query(request: Request, payload: QueryRequest) -> QueryResponse | JSONRe
         return pipeline_service.run_query(
             question=payload.question,
             schema=schema_cache,
+            conversation_context=payload.conversation_context,
         )
     except QueryPipelineError as exc:
         status_code = _map_error_code_to_status(exc.code)

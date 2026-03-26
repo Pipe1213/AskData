@@ -3,7 +3,7 @@ from app.llm.base import BaseLLMClient
 from app.llm.openai_client import OpenAILLMClient
 from app.llm.prompt_builders import build_sql_generation_messages, build_sql_repair_messages
 from app.llm.response_models import LLMGenerationConfig, LLMMessage
-from app.schemas.query import SQLGenerationResult
+from app.schemas.query import ConversationMessage, SQLGenerationResult
 from app.schemas.retrieval import RetrievedSchemaContext
 
 
@@ -20,11 +20,13 @@ class SQLGenerationService:
         self,
         question: str,
         schema_context: RetrievedSchemaContext,
+        conversation_context: list[ConversationMessage] | None = None,
     ) -> SQLGenerationResult:
         messages = build_sql_generation_messages(
             question=question,
             schema_context=schema_context,
             max_result_rows=self.settings.max_result_rows,
+            conversation_context=conversation_context,
         )
         return self._run_structured_generation(messages)
 
@@ -34,6 +36,7 @@ class SQLGenerationService:
         schema_context: RetrievedSchemaContext,
         previous_sql: str,
         failure_message: str,
+        conversation_context: list[ConversationMessage] | None = None,
     ) -> SQLGenerationResult:
         messages = build_sql_repair_messages(
             question=question,
@@ -41,6 +44,7 @@ class SQLGenerationService:
             previous_sql=previous_sql,
             failure_message=failure_message,
             max_result_rows=self.settings.max_result_rows,
+            conversation_context=conversation_context,
         )
         return self._run_structured_generation(messages)
 

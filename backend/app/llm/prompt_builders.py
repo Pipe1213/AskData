@@ -1,13 +1,17 @@
 import json
 
+from app.schemas.query import ConversationMessage
 from app.schemas.retrieval import RetrievedSchemaContext
+from app.utils.text import significant_tokens
 
 
 def build_sql_generation_messages(
     question: str,
     schema_context: RetrievedSchemaContext,
     max_result_rows: int,
+    conversation_context: list[ConversationMessage] | None = None,
 ) -> list[dict[str, str]]:
+    domain_hints = _build_pagila_domain_hints(question)
     system_prompt = f"""
 You are an expert PostgreSQL analytics assistant.
 Generate a single read-only PostgreSQL query that answers the user's question.
@@ -23,11 +27,17 @@ Rules:
 - Use PostgreSQL syntax only.
 - Do not invent columns or tables.
 - Return structured JSON matching the required schema.
+
+Pagila-specific business hints:
+{domain_hints}
 """.strip()
 
     user_prompt = f"""
 User question:
 {question}
+
+Recent conversation context:
+{_format_conversation_context(conversation_context)}
 
 Retrieved schema context:
 {_format_schema_context(schema_context)}
@@ -71,6 +81,18 @@ def _format_schema_context(schema_context: RetrievedSchemaContext) -> str:
     return "\n\n".join(sections)
 
 
+def _format_conversation_context(
+    conversation_context: list[ConversationMessage] | None,
+) -> str:
+    if not conversation_context:
+        return "None"
+
+    return "\n".join(
+        f"- {message.role}: {message.content}"
+        for message in conversation_context
+    )
+
+
 def build_answer_summary_messages(
     question: str,
     generated_sql: str,
@@ -111,7 +133,9 @@ def build_sql_repair_messages(
     previous_sql: str,
     failure_message: str,
     max_result_rows: int,
+    conversation_context: list[ConversationMessage] | None = None,
 ) -> list[dict[str, str]]:
+    domain_hints = _build_pagila_domain_hints(question)
     system_prompt = f"""
 You are repairing a PostgreSQL analytics query.
 Produce one corrected read-only PostgreSQL query that answers the original question.
@@ -126,11 +150,17 @@ Rules:
 - Aggregate queries without LIMIT are acceptable when the output is naturally small.
 - Use PostgreSQL syntax only.
 - Return structured JSON matching the required schema.
+
+Pagila-specific business hints:
+{domain_hints}
 """.strip()
 
     user_prompt = f"""
 Original user question:
 {question}
+
+Recent conversation context:
+{_format_conversation_context(conversation_context)}
 
 Retrieved schema context:
 {_format_schema_context(schema_context)}
@@ -151,3 +181,26 @@ Return:
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt},
     ]
+
+
+def _build_pagila_domain_hints(question: str) -> str:
+    question_tokens = significant_tokens(question)
+    hints: list[str] = [
+        "- Use only the retrieved schema context. If the question cannot be answered safely from it, be conservative.",
+    ]
+
+    if question_tokens & {"revenue", "sale", "sales", "spend", "spent", "earning", "earnings"}:
+        hints.append("- In Pagila, revenue or customer spend is usually measured with payment.amount.")
+
+    if question_tokens & {"category", "genre"} and question_tokens & {"revenue", "sale", "sales", "spend", "spent"}:
+        hints.append(
+            "- Category revenue typically requires joins through payment -> rental -> inventory -> film_category -> category."
+        )
+
+    if question_tokens & {"staff", "employee", "employees"} and question_tokens & {"revenue", "sale", "sales", "spend", "spent"}:
+        hints.append("- Staff processed revenue usually uses payment.staff_id together with payment.amount.")
+
+    if question_tokens & {"rental", "rentals", "rented", "trend", "monthly", "date", "month", "year"}:
+        hints.append("- Rental trends usually rely on rental.rental_date; payment trends usually rely on payment.payment_date.")
+
+    return "\n".join(hints)

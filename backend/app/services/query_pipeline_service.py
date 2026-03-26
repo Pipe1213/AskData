@@ -2,12 +2,13 @@ from app.core.config import Settings, get_settings
 from app.core.exceptions import QueryPipelineError
 from app.db.metadata_models import DatabaseSchema
 from app.llm.base import LLMClientError
-from app.schemas.query import QueryResponse
+from app.schemas.query import ConversationMessage, QueryResponse
 from app.services.response_formatter_service import ResponseFormatterService
 from app.services.retrieval_service import RetrievalService
 from app.services.sql_execution_service import SQLExecutionService
 from app.services.sql_generation_service import SQLGenerationService
 from app.services.sql_validation_service import SQLValidationService
+from app.utils.text import significant_tokens
 
 
 class QueryPipelineService:
@@ -40,6 +41,7 @@ class QueryPipelineService:
         self,
         question: str,
         schema: DatabaseSchema | None,
+        conversation_context: list[ConversationMessage] | None = None,
     ) -> QueryResponse:
         normalized_question = question.strip()
         if not normalized_question:
@@ -58,8 +60,16 @@ class QueryPipelineService:
                 retryable=False,
             )
 
-        retrieval_context = self.retrieval_service.retrieve_schema_context(
+        normalized_conversation_context = self._normalize_conversation_context(
+            conversation_context
+        )
+        retrieval_question = self._build_retrieval_question(
             normalized_question,
+            normalized_conversation_context,
+        )
+
+        retrieval_context = self.retrieval_service.retrieve_schema_context(
+            retrieval_question,
             schema,
         )
         if not retrieval_context.tables:
@@ -75,6 +85,7 @@ class QueryPipelineService:
             generation_result = self.sql_generation_service.generate_sql(
                 question=normalized_question,
                 schema_context=retrieval_context,
+                conversation_context=normalized_conversation_context,
             )
         except LLMClientError as exc:
             raise QueryPipelineError(
@@ -89,6 +100,7 @@ class QueryPipelineService:
             retrieval_context=retrieval_context,
             generation_result=generation_result,
             allow_repair=True,
+            conversation_context=normalized_conversation_context,
         )
 
         used_tables = self._merge_used_tables(
@@ -120,6 +132,7 @@ class QueryPipelineService:
         retrieval_context,
         generation_result,
         allow_repair: bool,
+        conversation_context: list[ConversationMessage],
     ) -> dict:
         validation_result = self.sql_validation_service.validate_sql(generation_result.sql)
         if not validation_result.is_valid:
@@ -139,12 +152,14 @@ class QueryPipelineService:
                     previous_sql=generation_result.sql,
                     failure_message="; ".join(validation_result.errors),
                     repair_stage="validation",
+                    conversation_context=conversation_context,
                 )
                 result = self._validate_and_execute_once(
                     question=question,
                     retrieval_context=retrieval_context,
                     generation_result=repaired_result,
                     allow_repair=False,
+                    conversation_context=conversation_context,
                 )
                 result["repair_warnings"] = [
                     "SQL was repaired once after a validation failure.",
@@ -175,12 +190,14 @@ class QueryPipelineService:
                         else "SQL execution failed."
                     ),
                     repair_stage="execution",
+                    conversation_context=conversation_context,
                 )
                 result = self._validate_and_execute_once(
                     question=question,
                     retrieval_context=retrieval_context,
                     generation_result=repaired_result,
                     allow_repair=False,
+                    conversation_context=conversation_context,
                 )
                 result["repair_warnings"] = [
                     "SQL was repaired once after an execution failure.",
@@ -218,6 +235,7 @@ class QueryPipelineService:
         previous_sql: str,
         failure_message: str,
         repair_stage: str,
+        conversation_context: list[ConversationMessage],
     ):
         try:
             return self.sql_generation_service.repair_sql(
@@ -225,6 +243,7 @@ class QueryPipelineService:
                 schema_context=retrieval_context,
                 previous_sql=previous_sql,
                 failure_message=failure_message,
+                conversation_context=conversation_context,
             )
         except LLMClientError as exc:
             raise QueryPipelineError(
@@ -286,3 +305,61 @@ class QueryPipelineService:
             return short_name_map.get(normalized_name)
 
         return None
+
+    def _normalize_conversation_context(
+        self,
+        conversation_context: list[ConversationMessage] | None,
+    ) -> list[ConversationMessage]:
+        if not conversation_context:
+            return []
+
+        normalized_messages: list[ConversationMessage] = []
+        for message in conversation_context[-6:]:
+            content = message.content.strip()
+            if not content:
+                continue
+
+            normalized_messages.append(
+                ConversationMessage(
+                    role=message.role,
+                    content=content[:500],
+                )
+            )
+
+        return normalized_messages
+
+    def _build_retrieval_question(
+        self,
+        question: str,
+        conversation_context: list[ConversationMessage],
+    ) -> str:
+        if not conversation_context:
+            return question
+
+        if not self._should_apply_context_to_retrieval(question):
+            return question
+
+        context_hints = " ".join(message.content for message in conversation_context)
+        return f"{question}\nContext hints: {context_hints}"
+
+    def _should_apply_context_to_retrieval(self, question: str) -> bool:
+        normalized_question = question.strip().lower()
+        question_tokens = significant_tokens(normalized_question)
+        referential_terms = {
+            "that",
+            "those",
+            "them",
+            "it",
+            "now",
+            "same",
+            "previous",
+            "above",
+            "instead",
+            "only",
+            "also",
+        }
+
+        if len(question_tokens) <= 3:
+            return True
+
+        return any(term in normalized_question.split() for term in referential_terms)

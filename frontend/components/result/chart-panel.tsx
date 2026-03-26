@@ -18,6 +18,7 @@ type ChartPanelProps = {
   columns?: string[];
   rows?: Array<Array<unknown>>;
   isLoading: boolean;
+  variant?: "panel" | "embedded";
 };
 
 type ChartRow = Record<string, string | number>;
@@ -27,6 +28,7 @@ export function ChartPanel({
   columns,
   rows,
   isLoading,
+  variant = "panel",
 }: ChartPanelProps) {
   const chartData = buildChartData(columns, rows);
   const canRender =
@@ -36,15 +38,17 @@ export function ChartPanel({
     rows.length > 0 &&
     canRenderChart(chartRecommendation) &&
     chartData.length > 0;
+  const wrapperClass =
+    variant === "embedded" ? "rounded-[24px] border border-line bg-white/85 p-4" : "panel p-5";
 
   return (
-    <section className="panel p-5">
-      <div className="eyebrow">Chart</div>
-      <div className="mt-4 flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+    <section className={wrapperClass}>
+      <div className={`${variant === "panel" ? "mt-4" : ""} flex flex-col gap-3 md:flex-row md:items-end md:justify-between`}>
         <div>
-          <h3 className="section-title">Visualization</h3>
+          {variant === "panel" ? <div className="eyebrow">Chart</div> : null}
+          <h3 className={`${variant === "panel" ? "section-title mt-4" : "text-base font-semibold text-ink"}`}>Visualization</h3>
           <p className="mt-2 text-sm leading-6 text-muted">
-            This panel follows the backend chart recommendation instead of guessing independently.
+            This chart follows the backend recommendation instead of guessing independently.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -93,25 +97,15 @@ export function ChartPanel({
             </ResponsiveContainer>
           </div>
         ) : (
-          <div className="grid h-[220px] grid-cols-4 items-end gap-4">
-            {[78, 72, 69, 63].map((height, index) => (
-              <div key={height} className="space-y-2">
-                <div
-                  className="w-full rounded-t-2xl bg-gradient-to-t from-accent to-[#f2ad74]"
-                  style={{ height: `${height}%` }}
-                />
-                <p className="text-center text-xs font-medium text-muted">
-                  {["Sports", "Animation", "Sci-Fi", "Family"][index]}
-                </p>
-              </div>
-            ))}
+          <div className="flex h-[220px] items-center justify-center text-sm leading-6 text-muted">
+            The backend did not recommend a chart for this answer.
           </div>
         )}
       </div>
       <p className="mt-3 text-sm leading-6 text-muted">
         {canRender
           ? "The chart is using the backend recommendation plus the live result rows returned by /query."
-          : "When the backend returns a chart recommendation with plottable rows, this panel renders it with Recharts. Otherwise it stays in a safe fallback state."}
+          : "Charts only appear when the backend returns a useful chart recommendation with plottable rows."}
       </p>
     </section>
   );

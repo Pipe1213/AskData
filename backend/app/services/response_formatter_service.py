@@ -1,3 +1,5 @@
+from numbers import Number
+
 from app.core.config import Settings, get_settings
 from app.llm.base import BaseLLMClient, LLMClientError
 from app.llm.openai_client import OpenAILLMClient
@@ -69,8 +71,9 @@ class ResponseFormatterService:
                     max_output_tokens=160,
                 ),
             )
-            if response.text.strip():
-                return response.text.strip()
+            summary = response.text.strip()
+            if self._is_usable_summary(summary):
+                return summary
         except LLMClientError:
             pass
 
@@ -90,6 +93,9 @@ class ResponseFormatterService:
         if execution_result.row_count == 0:
             return "The query returned no rows."
 
+        if execution_result.row_count == 1 and len(execution_result.columns) == 1:
+            return f"The result is {execution_result.rows[0][0]}."
+
         if execution_result.row_count == 1 and execution_result.columns:
             value_parts = [
                 f"{column}={value}"
@@ -101,10 +107,43 @@ class ResponseFormatterService:
             ]
             return "The query returned one row: " + ", ".join(value_parts) + "."
 
+        if execution_result.columns and execution_result.rows:
+            first_row = execution_result.rows[0]
+            label_index = self._find_label_column_index(
+                execution_result.columns,
+                first_row,
+            )
+            metric_index = self._find_numeric_column_index(
+                execution_result.rows,
+                execution_result.columns,
+                preferred_after_index=label_index,
+            )
+
+            if (
+                label_index is not None
+                and metric_index is not None
+                and label_index < len(first_row)
+                and metric_index < len(first_row)
+            ):
+                return (
+                    f"The query returned {execution_result.row_count} rows. "
+                    f"The leading result was {execution_result.columns[label_index]}={first_row[label_index]}, "
+                    f"{execution_result.columns[metric_index]}={first_row[metric_index]}."
+                )
+
         return (
             f"The query returned {execution_result.row_count} rows "
             f"across {len(execution_result.columns)} columns."
         )
+
+    def _is_usable_summary(self, summary: str) -> bool:
+        if len(summary) < 16:
+            return False
+
+        if len(summary.split()) < 4:
+            return False
+
+        return True
 
     def _recommend_chart(
         self,
@@ -116,8 +155,18 @@ class ResponseFormatterService:
         if len(columns) < 2 or not rows:
             return ChartRecommendation(type="table_only")
 
-        x_index = 0
-        y_index = self._find_numeric_column_index(rows)
+        if len(rows) < 2 or len(rows) > 24:
+            return ChartRecommendation(type="table_only")
+
+        x_index = self._find_label_column_index(columns, rows[0])
+        if x_index is None:
+            x_index = 0
+
+        y_index = self._find_numeric_column_index(
+            rows,
+            columns,
+            preferred_after_index=x_index,
+        )
         if y_index is None or y_index == x_index:
             return ChartRecommendation(type="table_only")
 
@@ -129,15 +178,59 @@ class ResponseFormatterService:
 
         return ChartRecommendation(type="bar", x=x_column, y=y_column)
 
-    def _find_numeric_column_index(self, rows: list[list[object]]) -> int | None:
+    def _find_numeric_column_index(
+        self,
+        rows: list[list[object]],
+        columns: list[str] | None = None,
+        preferred_after_index: int | None = None,
+    ) -> int | None:
         if not rows:
             return None
 
         first_row = rows[0]
-        for index, value in enumerate(first_row):
+        candidate_indices = list(range(len(first_row)))
+
+        if preferred_after_index is not None:
+            candidate_indices = [
+                index for index in candidate_indices
+                if index != preferred_after_index
+            ]
+            candidate_indices.sort(key=lambda index: (index <= preferred_after_index, index))
+
+        prioritized_indices: list[int] = []
+        if columns is not None:
+            metric_like_indices = [
+                index
+                for index in candidate_indices
+                if not columns[index].lower().endswith("_id")
+            ]
+            prioritized_indices.extend(metric_like_indices)
+            prioritized_indices.extend(
+                index for index in candidate_indices if index not in metric_like_indices
+            )
+        else:
+            prioritized_indices = candidate_indices
+
+        for index in prioritized_indices:
+            value = first_row[index]
             if isinstance(value, bool):
                 continue
-            if isinstance(value, (int, float)):
+            if isinstance(value, Number):
+                return index
+
+        return None
+
+    def _find_label_column_index(
+        self,
+        columns: list[str],
+        first_row: list[object],
+    ) -> int | None:
+        for index, value in enumerate(first_row):
+            if isinstance(value, str) and value.strip():
+                return index
+
+        for index, column_name in enumerate(columns):
+            if not column_name.lower().endswith("_id"):
                 return index
 
         return None

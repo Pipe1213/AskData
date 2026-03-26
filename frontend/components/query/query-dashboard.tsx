@@ -3,12 +3,15 @@
 import { useEffect, useState } from "react";
 
 import { Sidebar } from "@/components/layout/sidebar";
-import { ExamplePrompts } from "@/components/query/example-prompts";
 import { QuestionForm } from "@/components/query/question-form";
-import { QueryError } from "@/components/query/query-error";
 import { QueryWorkspace } from "@/components/query/query-workspace";
 import { ApiError, fetchExampleQuestions, queryAskData } from "@/lib/api";
-import type { ExampleQuestion, QueryErrorResponse, QueryResponse } from "@/lib/types";
+import type {
+  ConversationMessage,
+  ConversationTurn,
+  ExampleQuestion,
+  QueryErrorResponse,
+} from "@/lib/types";
 
 const fallbackPrompts = [
   "What are the top 10 film categories by total revenue?",
@@ -17,16 +20,12 @@ const fallbackPrompts = [
   "What is the monthly trend of rentals this year?",
 ];
 
-const defaultQuestion = fallbackPrompts[0];
-
 export function QueryDashboard() {
-  const [question, setQuestion] = useState(defaultQuestion);
-  const [queryResult, setQueryResult] = useState<QueryResponse | null>(null);
-  const [queryError, setQueryError] = useState<QueryErrorResponse | null>(null);
+  const [question, setQuestion] = useState("");
+  const [turns, setTurns] = useState<ConversationTurn[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [examplePrompts, setExamplePrompts] = useState<string[]>(fallbackPrompts);
   const [examplesState, setExamplesState] = useState<"idle" | "loading" | "success" | "error">("idle");
-  const showContextRail = isLoading || Boolean(queryResult) || hasVisibleWarnings(queryResult, queryError);
 
   useEffect(() => {
     let isActive = true;
@@ -67,81 +66,112 @@ export function QueryDashboard() {
       return;
     }
 
+    const turnId = createTurnId();
+
     setIsLoading(true);
-    setQueryError(null);
+    setQuestion("");
+    setTurns((currentTurns) => [
+      ...currentTurns,
+      {
+        id: turnId,
+        question: trimmedQuestion,
+        status: "loading",
+      },
+    ]);
 
     try {
-      const result = await queryAskData({ question: trimmedQuestion });
-      setQueryResult(result);
+      const result = await queryAskData({
+        question: trimmedQuestion,
+        conversation_context: buildConversationContext(turns),
+      });
+      setTurns((currentTurns) =>
+        currentTurns.map((turn) =>
+          turn.id === turnId
+            ? {
+                id: turn.id,
+                question: turn.question,
+                status: "success",
+                response: result,
+              }
+            : turn,
+        ),
+      );
     } catch (error) {
       const normalizedError = normalizeQueryError(error);
-      setQueryResult(null);
-      setQueryError(normalizedError);
+      setTurns((currentTurns) =>
+        currentTurns.map((turn) =>
+          turn.id === turnId
+            ? {
+                id: turn.id,
+                question: turn.question,
+                status: "error",
+                error: normalizedError,
+              }
+            : turn,
+        ),
+      );
     } finally {
       setIsLoading(false);
     }
   }
 
+  const latestResolvedTurn = [...turns]
+    .reverse()
+    .find((turn) => turn.status === "success" || turn.status === "error");
+  const latestWarnings =
+    latestResolvedTurn?.status === "success"
+      ? latestResolvedTurn.response.warnings
+      : latestResolvedTurn?.status === "error"
+        ? latestResolvedTurn.error.warnings
+        : [];
+  const latestUsedTables =
+    latestResolvedTurn?.status === "success" ? latestResolvedTurn.response.used_tables : [];
+
   return (
-    <main className={`mt-6 grid gap-6 ${showContextRail ? "xl:grid-cols-[minmax(0,1fr)_320px]" : ""}`}>
-      <section className="space-y-6">
+    <main className="mt-6 grid gap-6 xl:grid-cols-[300px_minmax(0,1fr)]">
+      <Sidebar
+        prompts={examplePrompts}
+        onSelectPrompt={setQuestion}
+        warnings={latestWarnings}
+        usedTables={latestUsedTables}
+        isLoading={isLoading}
+      />
+
+      <section className="space-y-5">
         <div className="panel bg-hero-wash p-6 md:p-8">
-          <div className="eyebrow">AskData</div>
-          <div className="mt-4 grid gap-8 lg:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]">
-            <div>
-              <h1 className="max-w-[12ch] font-serif text-4xl leading-[0.95] tracking-[-0.04em] text-ink md:text-6xl">
-                Ask better questions. Inspect better answers.
-              </h1>
-              <p className="mt-5 max-w-[58ch] text-base leading-7 text-muted md:text-lg">
-                Ask a business question about the Pagila dataset and review the answer, SQL, and
-                result data in one place.
-              </p>
-              <p className="mt-5 text-sm leading-6 text-muted">
-                {examplesState === "success"
-                  ? "Example prompts below are loaded from the backend."
-                  : examplesState === "loading"
-                    ? "Loading curated example prompts..."
-                    : "Using local fallback prompts while the backend examples load."}
-              </p>
-            </div>
-            <QuestionForm
-              question={question}
-              isLoading={isLoading}
-              onQuestionChange={setQuestion}
-              onSubmit={handleSubmit}
-            />
+          <div className="max-w-[72ch]">
+            <div className="eyebrow">AskData</div>
+            <h1 className="mt-4 max-w-[14ch] font-serif text-4xl leading-[0.95] tracking-[-0.04em] text-ink md:text-6xl">
+              Conversation first. Analysis when you need it.
+            </h1>
+            <p className="mt-5 max-w-[60ch] text-base leading-7 text-muted md:text-lg">
+              Ask business questions in plain language and inspect the supporting SQL, rows, and
+              chart only when they are useful.
+            </p>
+            <p className="mt-5 text-sm leading-6 text-muted">
+              {examplesState === "success"
+                ? "The left rail is using example prompts loaded from the backend."
+                : examplesState === "loading"
+                  ? "Loading curated example prompts from the backend..."
+                  : "The left rail is using local fallback prompts until the backend examples finish loading."}
+            </p>
           </div>
         </div>
 
-        <ExamplePrompts
-          prompts={examplePrompts}
-          disabled={isLoading}
-          onSelectPrompt={setQuestion}
-        />
-
-        {queryError ? (
-          <QueryError
-            title="Request failed"
-            message={queryError.error.message}
-            warnings={queryError.warnings}
-            errorCode={queryError.error.code}
-          />
-        ) : null}
-
         <QueryWorkspace
-          queryResult={queryResult}
+          turns={turns}
           isLoading={isLoading}
-          hasError={Boolean(queryError)}
         />
-      </section>
 
-      {showContextRail ? (
-        <Sidebar
-          warnings={queryResult?.warnings ?? queryError?.warnings ?? []}
-          usedTables={queryResult?.used_tables ?? []}
-          isLoading={isLoading}
-        />
-      ) : null}
+        <div className="sticky bottom-4 z-20">
+          <QuestionForm
+            question={question}
+            isLoading={isLoading}
+            onQuestionChange={setQuestion}
+            onSubmit={handleSubmit}
+          />
+        </div>
+      </section>
     </main>
   );
 }
@@ -195,9 +225,22 @@ function normalizeExamples(examples: ExampleQuestion[]): string[] {
     .filter((question) => question.length > 0);
 }
 
-function hasVisibleWarnings(
-  queryResult: QueryResponse | null,
-  queryError: QueryErrorResponse | null,
-): boolean {
-  return (queryResult?.warnings.length ?? 0) > 0 || (queryError?.warnings.length ?? 0) > 0;
+function createTurnId(): string {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function buildConversationContext(turns: ConversationTurn[]): ConversationMessage[] {
+  const resolvedTurns = turns.filter((turn) => turn.status === "success");
+  const recentTurns = resolvedTurns.slice(-3);
+
+  return recentTurns.flatMap((turn) => [
+    {
+      role: "user",
+      content: turn.question,
+    },
+    {
+      role: "assistant",
+      content: turn.response.answer_summary,
+    },
+  ]);
 }

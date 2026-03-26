@@ -2,13 +2,43 @@ type ExamplePromptsProps = {
   prompts: string[];
   disabled?: boolean;
   onSelectPrompt?: (prompt: string) => void;
+  variant?: "panel" | "compact";
 };
 
 export function ExamplePrompts({
   prompts,
   disabled = false,
   onSelectPrompt,
+  variant = "panel",
 }: ExamplePromptsProps) {
+  if (variant === "compact") {
+    return (
+      <section className="space-y-3">
+        <div>
+          <p className="eyebrow">Quick starts</p>
+          <h2 className="section-title mt-4">Try one of these</h2>
+          <p className="section-copy mt-3">
+            These fill the chat composer with a real example question.
+          </p>
+        </div>
+
+        <div className="space-y-2">
+          {prompts.map((prompt) => (
+            <button
+              key={prompt}
+              type="button"
+              disabled={disabled}
+              onClick={() => onSelectPrompt?.(prompt)}
+              className="flex min-h-11 w-full cursor-pointer items-start rounded-[20px] border border-line bg-white/85 px-4 py-3 text-left text-sm leading-6 text-ink transition hover:border-accent hover:bg-white disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {prompt}
+            </button>
+          ))}
+        </div>
+      </section>
+    );
+  }
+
   return (
     <section className="panel p-5 md:p-6">
       <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
@@ -29,7 +59,7 @@ export function ExamplePrompts({
             type="button"
             disabled={disabled}
             onClick={() => onSelectPrompt?.(prompt)}
-            className="rounded-[24px] border border-line bg-white/80 px-4 py-4 text-left text-sm leading-6 text-ink transition hover:-translate-y-0.5 hover:border-accent hover:bg-white disabled:cursor-not-allowed disabled:opacity-60"
+            className="cursor-pointer rounded-[24px] border border-line bg-white/80 px-4 py-4 text-left text-sm leading-6 text-ink transition hover:-translate-y-0.5 hover:border-accent hover:bg-white disabled:cursor-not-allowed disabled:opacity-60"
           >
             {prompt}
           </button>

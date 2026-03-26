@@ -12,23 +12,23 @@ export function QuestionForm({
   onSubmit,
 }: QuestionFormProps) {
   return (
-    <section className="panel-strong p-5 md:p-6">
+    <section className="panel-strong border-accent/20 p-4 md:p-5">
       <div className="flex items-center justify-between gap-3">
         <div>
-          <p className="eyebrow">Question input</p>
-          <h2 className="section-title mt-4">What do you want to understand?</h2>
+          <p className="eyebrow">AskData chat</p>
+          <h2 className="section-title mt-4">Ask a business question</h2>
         </div>
-        <span className="chip">{isLoading ? "Running" : "Live query"}</span>
+        <span className="chip">{isLoading ? "Thinking" : "Ready"}</span>
       </div>
 
-      <label className="mt-5 block">
-        <span className="mb-2 block text-sm font-semibold text-ink">Business question</span>
+      <label className="mt-4 block">
+        <span className="mb-2 block text-sm font-semibold text-ink">Message</span>
         <textarea
-          rows={6}
+          rows={4}
           value={question}
           onChange={(event) => onQuestionChange(event.target.value)}
-          placeholder="Ask a business question about the Pagila dataset..."
-          className="w-full resize-none rounded-[24px] border border-line bg-white px-4 py-4 text-sm leading-6 text-ink outline-none transition focus:border-accent"
+          placeholder="Ask about revenue, customers, rentals, trends, or categories..."
+          className="w-full resize-none rounded-[28px] border border-line bg-white px-4 py-4 text-sm leading-6 text-ink outline-none transition focus:border-accent"
         />
       </label>
 
@@ -37,13 +37,12 @@ export function QuestionForm({
           type="button"
           onClick={onSubmit}
           disabled={isLoading || !question.trim()}
-          className="rounded-full bg-accent px-5 py-3 text-sm font-semibold text-white shadow-soft transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-60"
+          className="min-h-11 cursor-pointer rounded-full bg-accent px-5 py-3 text-sm font-semibold text-white shadow-soft transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-60"
         >
-          {isLoading ? "Running..." : "Run query"}
+          {isLoading ? "Thinking..." : "Send"}
         </button>
         <span className="text-sm leading-6 text-muted">
-          The form sends the question to the live backend and fills the workspace below when the
-          response returns.
+          AskData will answer in the conversation and keep the technical detail available only when you need it.
         </span>
       </div>
     </section>

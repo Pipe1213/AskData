@@ -11,6 +11,12 @@ class SQLGenerationResult(BaseModel):
 
 class QueryRequest(BaseModel):
     question: str
+    conversation_context: list["ConversationMessage"] = Field(default_factory=list)
+
+
+class ConversationMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str
 
 
 class ChartRecommendation(BaseModel):
