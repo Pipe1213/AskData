@@ -1,63 +1,79 @@
 # AskData
 
-AskData is an AI analytics copilot that lets users ask business questions in natural language over a PostgreSQL database and receive:
+AskData is a web app for asking questions about a PostgreSQL database in plain language.
 
-- a short answer summary
-- the generated SQL
+You type a business question, the backend turns it into SQL, checks that the SQL is safe, runs it against PostgreSQL, and returns:
+
+- a short answer
+- the SQL it used
 - result rows
-- a simple chart recommendation
-- the tables used to answer the question
+- a simple chart when it makes sense
+- the tables involved
 
-The project is built as a product, not as a one-off text-to-SQL script. Its core value is the controlled pipeline around the model: schema-aware retrieval, SQL safety validation, read-only execution, structured responses, and a chat-first UI.
+This project is still at the MVP stage, but it already works end to end and is designed to be easy to run locally.
 
-## Why this project exists
+## What the product looks like
 
-Generic LLMs can already connect to databases. AskData exists to show how that capability becomes a usable, trustworthy product.
+### Main chat view
 
-The focus is on:
+![AskData chat view](assets/readme/chat-answer.png)
 
-- safe SQL generation and execution
-- schema-aware context retrieval
-- deterministic backend orchestration
-- inspectable outputs for user trust
-- local reproducibility with Docker
-- a polished enough UX to work as a portfolio project
+### Inspecting the answer details
 
-## Current MVP scope
+![AskData answer details](assets/readme/chat-answer-details.png)
 
-AskData currently supports:
+### Schema view
+
+![AskData schema view](assets/readme/schema-view.png)
+
+## How it works
+
+The product has three main parts:
+
+- a `Next.js` frontend
+- a `FastAPI` backend
+- a `PostgreSQL` database loaded with the Pagila sample dataset
+
+At a high level, the request flow is:
+
+1. the user asks a question in the chat UI
+2. the backend finds the most relevant schema context
+3. the backend asks the model for SQL
+4. the SQL is validated with read-only rules
+5. the SQL is executed against PostgreSQL
+6. the backend formats the result for the UI
+
+## Architecture
+
+![AskData architecture diagram](assets/architecture/askdata-system-architecture.png)
+
+The editable diagram source is included here:
+
+- [askdata-system-architecture.excalidraw](assets/architecture/askdata-system-architecture.excalidraw)
+
+## Current scope
+
+The current MVP includes:
 
 - PostgreSQL only
-- Pagila as the development dataset
+- Pagila as the working dataset
 - natural-language question input
-- schema introspection and schema overview
-- heuristic schema retrieval
-- LLM-based SQL generation
+- schema overview
+- schema-aware retrieval
+- SQL generation with an LLM
 - parser-based SQL validation
-- read-only SQL execution with timeout and row caps
-- answer summaries, result tables, and chart hints
-- session-local multi-turn chat in the UI
+- read-only execution with timeout and row limits
+- a conversation-style UI with session-local follow-up context
 
-Out of scope for the MVP:
+The current MVP does **not** include:
 
-- connect-your-own-database
+- user-provided databases
 - authentication
 - persistent chat history
 - multi-database support
-- multi-agent orchestration
 - dashboard building
 
-## Product flow
-
-1. The user asks a business question in the chat UI.
-2. The backend retrieves the most relevant schema context.
-3. The model generates SQL in a structured response format.
-4. The SQL is validated with read-only safety rules.
-5. The query is executed against PostgreSQL with a timeout and row limit policy.
-6. The backend returns a structured JSON response with summary, SQL, rows, chart hint, warnings, and used tables.
-7. The frontend renders that response as a conversational answer with optional details.
-
-## Architecture summary
+## Stack
 
 ### Frontend
 
@@ -65,13 +81,6 @@ Out of scope for the MVP:
 - `TypeScript`
 - `Tailwind CSS`
 - `Recharts`
-
-The frontend is conversation-first. The main UI has two persistent regions:
-
-- a collapsible left rail for navigation, prompts, warnings, and lineage
-- a chat surface for the conversation and schema view
-
-The UI keeps chat history only in browser memory for the current session.
 
 ### Backend
 
@@ -81,17 +90,7 @@ The UI keeps chat history only in browser memory for the current session.
 - `sqlglot`
 - `OpenAI`
 
-The backend is a deterministic pipeline, not a multi-agent system:
-
-1. receive question
-2. retrieve schema context
-3. generate SQL
-4. validate SQL
-5. execute SQL
-6. optionally repair once
-7. format response
-
-### Data and infrastructure
+### Data and local infrastructure
 
 - `PostgreSQL`
 - `Docker Compose`
@@ -119,11 +118,16 @@ AskData/
 ├─ demo_data/
 │  ├─ example_questions/
 │  └─ seed/
+├─ assets/
+│  ├─ architecture/
+│  └─ readme/
 ├─ docker-compose.yml
 └─ Makefile
 ```
 
-## Prerequisites
+## Run locally
+
+### Prerequisites
 
 You need:
 
@@ -133,9 +137,7 @@ You need:
 - `Docker` and `Docker Compose`
 - an `OPENAI_API_KEY`
 
-## Local setup
-
-### 1. Start PostgreSQL with Pagila
+### 1. Start PostgreSQL
 
 ```bash
 make docker-up
@@ -149,37 +151,23 @@ The local database is exposed on:
 
 - `localhost:55432`
 
-### 2. Configure the backend
+### 2. Create local env files
 
-Create a local backend env file:
+Backend:
 
 ```bash
 cp backend/.env.example backend/.env
 ```
 
-Then set your real OpenAI key in:
+Then set your real OpenAI key in `backend/.env`.
 
-- `backend/.env`
-
-Important backend defaults:
-
-- backend API: `http://127.0.0.1:8000`
-- PostgreSQL host: `localhost`
-- PostgreSQL port: `55432`
-
-### 3. Configure the frontend
-
-Create a local frontend env file:
+Frontend:
 
 ```bash
 cp frontend/.env.example frontend/.env.local
 ```
 
-Default frontend API target:
-
-- `NEXT_PUBLIC_ASKDATA_API_BASE_URL=http://127.0.0.1:8000`
-
-### 4. Install dependencies
+### 3. Install dependencies
 
 Backend:
 
@@ -193,7 +181,7 @@ Frontend:
 make frontend-install
 ```
 
-### 5. Start the app
+### 4. Start the app
 
 Backend:
 
@@ -212,9 +200,9 @@ Open:
 - frontend: `http://127.0.0.1:3000`
 - backend: `http://127.0.0.1:8000`
 
-## Verification
+## Verify the project
 
-Run the automated checks:
+Run the main checks:
 
 ```bash
 make verify
@@ -226,7 +214,7 @@ That runs:
 - frontend lint
 - frontend production build
 
-You can also verify the live API manually:
+You can also check the backend directly:
 
 ```bash
 curl http://127.0.0.1:8000/health
@@ -244,51 +232,48 @@ Try these in the chat UI:
 - `How many rentals happened each month?`
 - `Now show only the top 5`
 
-## Safety model
+## Safety rules
 
-The MVP enforces:
+The backend currently enforces:
 
-- `SELECT`-only query policy
-- rejection of unsafe statements such as `INSERT`, `UPDATE`, `DELETE`, `DROP`, and `ALTER`
-- rejection of multiple statements
-- parser-based validation before execution
-- read-only database connection behavior
+- `SELECT`-only queries
+- no `INSERT`, `UPDATE`, `DELETE`, `DROP`, or `ALTER`
+- no multiple statements
+- parser-based SQL validation before execution
+- read-only execution
 - statement timeout
 - row limit policy
 - at most one repair attempt
 
 ## Current limitations
 
-- answer quality is good for many common business questions, but not perfect
-- follow-up support is lightweight, not full conversational memory
-- conversation history is session-local only
-- charting is heuristic
-- Pagila dataset quirks can appear in user-facing outputs
+- answer quality is good for many common questions, but not perfect
+- follow-up support is lightweight
+- conversation history only lives in the current browser session
+- chart selection is heuristic
+- Pagila quirks can appear in user-facing answers
 
 ## Project status
 
-The project is currently at:
-
-- Phase 4.5: packaging and deployment preparation
+The project is currently in Phase 4: packaging and deployment preparation.
 
 Completed so far:
 
 - backend MVP
 - frontend MVP
-- conversation-first Phase 3 UX and quality pass
-- local setup audit
-- README, demo assets, and architecture assets
-
-Deployment is intentionally deferred until the packaging phase is complete and costs/hosting tradeoffs are reviewed carefully.
+- conversation-first UI refinement
+- quality improvements for retrieval and formatting
+- local setup cleanup
+- README, screenshots, and architecture assets
 
 ## Deployment note
 
-The project is deployment-ready in architecture, but not yet deployed publicly.
+The app is not publicly deployed yet.
 
-The current recommended future hosting shape is:
+The current recommended future setup is:
 
 - frontend on Vercel
 - backend on Render or Railway
 - PostgreSQL on Neon or another managed Postgres provider
 
-The project still needs final hosting choice, production env configuration, and cost controls before public deployment.
+Deployment is intentionally deferred until hosting, costs, and public-demo protections are reviewed more carefully.
