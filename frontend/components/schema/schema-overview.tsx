@@ -8,7 +8,11 @@ import type { SchemaOverviewResponse } from "@/lib/types";
 
 type LoadState = "idle" | "loading" | "success" | "error";
 
-export function SchemaOverview() {
+type SchemaOverviewProps = {
+  variant?: "page" | "embedded";
+};
+
+export function SchemaOverview({ variant = "page" }: SchemaOverviewProps) {
   const [schemaOverview, setSchemaOverview] = useState<SchemaOverviewResponse | null>(null);
   const [loadState, setLoadState] = useState<LoadState>("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -73,15 +77,16 @@ export function SchemaOverview() {
   }, [schemaOverview, search]);
 
   return (
-    <div className="space-y-6">
-      <section className="panel p-5 md:p-6">
+    <div className={`h-full overflow-y-auto ${variant === "embedded" ? "px-4 py-5 md:px-6 md:py-6" : "space-y-6"}`}>
+      <section className={variant === "embedded" ? "border-b border-line pb-5" : "panel p-5 md:p-6"}>
         <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
           <div>
             <div className="eyebrow">Live backend data</div>
             <h2 className="section-title mt-4">Search the Pagila schema</h2>
             <p className="mt-3 text-sm leading-6 text-muted">
-              This page is now reading the real <code>/schema/overview</code> payload from the
-              backend. Use search to narrow tables by name, description, or column names.
+              {variant === "embedded"
+                ? "This view is reading the real /schema/overview payload from the backend. Use search to narrow tables by name, description, or column names."
+                : "This page is now reading the real /schema/overview payload from the backend. Use search to narrow tables by name, description, or column names."}
             </p>
           </div>
           <div className="grid gap-3 sm:grid-cols-3 lg:w-[420px]">
@@ -111,7 +116,7 @@ export function SchemaOverview() {
       </section>
 
       {loadState === "loading" ? (
-        <section className="panel p-6">
+        <section className={variant === "embedded" ? "pt-6" : "panel p-6"}>
           <p className="text-sm leading-6 text-muted">
             Loading schema metadata from the backend...
           </p>
@@ -119,7 +124,7 @@ export function SchemaOverview() {
       ) : null}
 
       {loadState === "error" ? (
-        <section className="panel p-6">
+        <section className={variant === "embedded" ? "pt-6" : "panel p-6"}>
           <div className="eyebrow">Schema error</div>
           <h2 className="section-title mt-4">The schema overview could not be loaded</h2>
           <p className="mt-3 text-sm leading-6 text-muted">
@@ -129,7 +134,7 @@ export function SchemaOverview() {
       ) : null}
 
       {loadState === "success" && filteredTables.length === 0 ? (
-        <section className="panel p-6">
+        <section className={variant === "embedded" ? "pt-6" : "panel p-6"}>
           <div className="eyebrow">No matches</div>
           <h2 className="section-title mt-4">No tables matched your search</h2>
           <p className="mt-3 text-sm leading-6 text-muted">
@@ -139,7 +144,9 @@ export function SchemaOverview() {
         </section>
       ) : null}
 
-      {filteredTables.length > 0 ? <SchemaTableList tables={filteredTables} /> : null}
+      <div className={variant === "embedded" ? "pt-6" : ""}>
+        {filteredTables.length > 0 ? <SchemaTableList tables={filteredTables} /> : null}
+      </div>
     </div>
   );
 }

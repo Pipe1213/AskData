@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { Sidebar } from "@/components/layout/sidebar";
 import { QuestionForm } from "@/components/query/question-form";
 import { QueryWorkspace } from "@/components/query/query-workspace";
+import { SchemaOverview } from "@/components/schema/schema-overview";
 import { ApiError, fetchExampleQuestions, queryAskData } from "@/lib/api";
 import type {
   ConversationMessage,
@@ -20,19 +21,20 @@ const fallbackPrompts = [
   "What is the monthly trend of rentals this year?",
 ];
 
+type DashboardView = "chat" | "schema";
+
 export function QueryDashboard() {
+  const [activeView, setActiveView] = useState<DashboardView>("chat");
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [question, setQuestion] = useState("");
   const [turns, setTurns] = useState<ConversationTurn[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [examplePrompts, setExamplePrompts] = useState<string[]>(fallbackPrompts);
-  const [examplesState, setExamplesState] = useState<"idle" | "loading" | "success" | "error">("idle");
 
   useEffect(() => {
     let isActive = true;
 
     async function loadExamples() {
-      setExamplesState("loading");
-
       try {
         const examples = await fetchExampleQuestions();
         if (!isActive) {
@@ -43,13 +45,10 @@ export function QueryDashboard() {
         if (questions.length > 0) {
           setExamplePrompts(questions);
         }
-        setExamplesState("success");
       } catch {
         if (!isActive) {
           return;
         }
-
-        setExamplesState("error");
       }
     }
 
@@ -127,50 +126,64 @@ export function QueryDashboard() {
   const latestUsedTables =
     latestResolvedTurn?.status === "success" ? latestResolvedTurn.response.used_tables : [];
 
+  function handleNewChat() {
+    if (isLoading) {
+      return;
+    }
+
+    setActiveView("chat");
+    setQuestion("");
+    setTurns([]);
+  }
+
+  function handleSelectPrompt(prompt: string) {
+    setActiveView("chat");
+    setQuestion(prompt);
+  }
+
   return (
-    <main className="mt-6 grid gap-6 xl:grid-cols-[300px_minmax(0,1fr)]">
+    <main
+      className={`grid h-[calc(100vh-2rem)] gap-4 md:h-[calc(100vh-2.5rem)] ${
+        sidebarCollapsed
+          ? "xl:grid-cols-[112px_minmax(0,1fr)]"
+          : "xl:grid-cols-[320px_minmax(0,1fr)] 2xl:grid-cols-[340px_minmax(0,1fr)]"
+      }`}
+    >
       <Sidebar
+        activeView={activeView}
+        collapsed={sidebarCollapsed}
+        onSelectView={setActiveView}
+        onToggleCollapse={() => setSidebarCollapsed((current) => !current)}
         prompts={examplePrompts}
-        onSelectPrompt={setQuestion}
+        onNewChat={handleNewChat}
+        onSelectPrompt={handleSelectPrompt}
         warnings={latestWarnings}
         usedTables={latestUsedTables}
         isLoading={isLoading}
       />
 
-      <section className="space-y-5">
-        <div className="panel bg-hero-wash p-6 md:p-8">
-          <div className="max-w-[72ch]">
-            <div className="eyebrow">AskData</div>
-            <h1 className="mt-4 max-w-[14ch] font-serif text-4xl leading-[0.95] tracking-[-0.04em] text-ink md:text-6xl">
-              Conversation first. Analysis when you need it.
-            </h1>
-            <p className="mt-5 max-w-[60ch] text-base leading-7 text-muted md:text-lg">
-              Ask business questions in plain language and inspect the supporting SQL, rows, and
-              chart only when they are useful.
-            </p>
-            <p className="mt-5 text-sm leading-6 text-muted">
-              {examplesState === "success"
-                ? "The left rail is using example prompts loaded from the backend."
-                : examplesState === "loading"
-                  ? "Loading curated example prompts from the backend..."
-                  : "The left rail is using local fallback prompts until the backend examples finish loading."}
-            </p>
-          </div>
-        </div>
+      <section className="panel flex h-full min-h-0 flex-col overflow-hidden">
+        {activeView === "chat" ? (
+          <>
+            <div className="min-h-0 flex-1">
+              <QueryWorkspace
+                turns={turns}
+                isLoading={isLoading}
+              />
+            </div>
 
-        <QueryWorkspace
-          turns={turns}
-          isLoading={isLoading}
-        />
-
-        <div className="sticky bottom-4 z-20">
-          <QuestionForm
-            question={question}
-            isLoading={isLoading}
-            onQuestionChange={setQuestion}
-            onSubmit={handleSubmit}
-          />
-        </div>
+            <div className="border-t border-line bg-white/88 px-4 py-4 backdrop-blur md:px-5">
+              <QuestionForm
+                question={question}
+                isLoading={isLoading}
+                onQuestionChange={setQuestion}
+                onSubmit={handleSubmit}
+              />
+            </div>
+          </>
+        ) : (
+          <SchemaOverview variant="embedded" />
+        )}
       </section>
     </main>
   );

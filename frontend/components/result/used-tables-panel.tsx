@@ -12,7 +12,7 @@ export function UsedTablesPanel({
   variant = "panel",
 }: UsedTablesPanelProps) {
   const wrapperClass =
-    variant === "compact" ? "rounded-[24px] border border-line bg-white/80 p-5" : "panel p-5";
+    variant === "compact" ? "" : "panel p-5";
 
   return (
     <section className={wrapperClass}>

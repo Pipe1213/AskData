@@ -16,9 +16,6 @@ type QueryWorkspaceProps = {
 };
 
 export function QueryWorkspace({ turns, isLoading }: QueryWorkspaceProps) {
-  const lastResolvedTurn = [...turns]
-    .reverse()
-    .find((turn) => turn.status === "success" || turn.status === "error");
   const conversationEndRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -29,45 +26,14 @@ export function QueryWorkspace({ turns, isLoading }: QueryWorkspaceProps) {
   }, [turns.length, isLoading]);
 
   return (
-    <section className="panel p-4 md:p-6">
-      <div className="flex flex-col gap-3 border-b border-line pb-4 md:flex-row md:items-end md:justify-between">
-        <div>
-          <p className="eyebrow">Conversation</p>
-          <h2 className="section-title mt-4">AskData session</h2>
-          <p className="section-copy mt-3">
-            The answer comes first. SQL, rows, and other artifacts stay available without taking
-            over the whole page.
-          </p>
-        </div>
-        <span className="chip">
-          {isLoading
-            ? "Assistant is thinking"
-            : lastResolvedTurn?.status === "success"
-              ? "Latest answer ready"
-              : lastResolvedTurn?.status === "error"
-                ? "Last turn failed"
-                : "Start the conversation"}
-        </span>
-      </div>
-
-      <div className="mt-6 space-y-5">
+    <section className="h-full overflow-y-auto px-4 py-5 md:px-6 md:py-6">
+      <div className="space-y-5">
         {turns.length === 0 && !isLoading ? (
-          <AssistantFrame>
-            <div className="space-y-4">
-              <p className="text-sm font-semibold uppercase tracking-[0.16em] text-accent">
-                Assistant
-              </p>
-              <h3 className="font-serif text-3xl leading-tight tracking-[-0.03em] text-ink">
-                Ask a question in plain language. Inspect only the detail you need.
-              </h3>
-              <p className="max-w-[65ch] text-sm leading-7 text-muted md:text-base">
-                AskData is tuned for business questions over the Pagila PostgreSQL dataset. Start
-                with revenue, customers, rentals, trends, or categories. When the answer comes
-                back, the supporting artifacts appear inside the response instead of taking over the
-                page.
-              </p>
-            </div>
-          </AssistantFrame>
+          <div className="flex min-h-full items-center justify-center py-16">
+            <p className="max-w-[30ch] text-center font-serif text-3xl leading-tight tracking-[-0.03em] text-ink md:text-4xl">
+              Ask a question in plain language. Inspect only the detail you need.
+            </p>
+          </div>
         ) : null}
 
         {turns.map((turn) => (
