@@ -6,6 +6,7 @@ from app.schemas.query import (
     ConversationMessage,
     QueryResponse,
     SQLGenerationResult,
+    SQLSemanticReviewResult,
 )
 from app.schemas.retrieval import RetrievedSchemaContext, RetrievedTable
 from app.schemas.validation import SQLValidationResult
@@ -46,6 +47,7 @@ class FakeSQLGenerationService:
         ]
         self.generate_calls = 0
         self.repair_calls = 0
+        self.review_calls = 0
         self.last_conversation_context = None
 
     def generate_sql(
@@ -69,6 +71,17 @@ class FakeSQLGenerationService:
         self.repair_calls += 1
         self.last_conversation_context = conversation_context
         return self.generated[1]
+
+    def review_sql(
+        self,
+        question: str,
+        schema_context: RetrievedSchemaContext,
+        generated_sql: str,
+        conversation_context=None,
+    ) -> SQLSemanticReviewResult:
+        self.review_calls += 1
+        self.last_conversation_context = conversation_context
+        return SQLSemanticReviewResult(should_rewrite=False, issues=[])
 
 
 class FakeSQLValidationService:
@@ -117,6 +130,7 @@ class FakeResponseFormatterService:
         execution_result: SQLExecutionResult,
         used_tables: list[str],
         warnings: list[str] | None = None,
+        repaired: bool = False,
     ) -> QueryResponse:
         return QueryResponse(
             question=question,
@@ -124,9 +138,11 @@ class FakeResponseFormatterService:
             generated_sql=generated_sql,
             columns=execution_result.columns,
             rows=execution_result.rows,
+            row_count=execution_result.row_count,
             chart_recommendation=ChartRecommendation(type="table_only"),
             warnings=warnings or [],
             used_tables=used_tables,
+            repaired=repaired,
         )
 
 
@@ -145,6 +161,7 @@ def test_query_pipeline_repairs_once_after_validation_failure(sample_schema) -> 
     response = pipeline_service.run_query("How much revenue by customer?", sample_schema)
 
     assert generation_service.generate_calls == 1
+    assert generation_service.review_calls == 1
     assert generation_service.repair_calls == 1
     assert "repaired once after a validation failure" in " ".join(response.warnings).lower()
     assert response.generated_sql.endswith("LIMIT 200")
@@ -263,3 +280,50 @@ def test_query_pipeline_uses_recent_context_for_referential_follow_up(sample_sch
     assert retrieval_service.last_question is not None
     assert "Context hints" in retrieval_service.last_question
     assert generation_service.last_conversation_context == context
+
+
+def test_query_pipeline_rewrites_once_after_semantic_review(sample_schema) -> None:
+    retrieval_service = FakeRetrievalService()
+
+    class SemanticReviewGenerationService(FakeSQLGenerationService):
+        def review_sql(
+            self,
+            question: str,
+            schema_context: RetrievedSchemaContext,
+            generated_sql: str,
+            conversation_context=None,
+        ) -> SQLSemanticReviewResult:
+            self.review_calls += 1
+            return SQLSemanticReviewResult(
+                should_rewrite=True,
+                issues=["The SQL uses a count metric instead of spend."],
+                suggested_focus="Use payment.amount as the primary metric.",
+            )
+
+    class ValidatingSQLValidationService:
+        def validate_sql(self, sql: str) -> SQLValidationResult:
+            return SQLValidationResult(
+                original_sql=sql,
+                validated_sql=sql,
+                is_valid=True,
+                can_repair=False,
+                classification="valid",
+                warnings=[],
+                detected_tables=["payment"],
+            )
+
+    generation_service = SemanticReviewGenerationService()
+    pipeline_service = QueryPipelineService(
+        retrieval_service=retrieval_service,
+        sql_generation_service=generation_service,
+        sql_validation_service=ValidatingSQLValidationService(),
+        sql_execution_service=FakeSQLExecutionService(),
+        response_formatter_service=FakeResponseFormatterService(),
+    )
+
+    response = pipeline_service.run_query("Which customers spent the most in total?", sample_schema)
+
+    assert generation_service.generate_calls == 1
+    assert generation_service.review_calls == 1
+    assert generation_service.repair_calls == 1
+    assert any("semantic review" in warning.lower() for warning in response.warnings)

@@ -9,6 +9,12 @@ class SQLGenerationResult(BaseModel):
     notes: list[str] = Field(default_factory=list)
 
 
+class SQLSemanticReviewResult(BaseModel):
+    should_rewrite: bool = False
+    issues: list[str] = Field(default_factory=list)
+    suggested_focus: str | None = None
+
+
 class QueryRequest(BaseModel):
     question: str
     session_id: str | None = None

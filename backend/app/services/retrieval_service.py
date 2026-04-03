@@ -3,6 +3,7 @@ from collections import defaultdict
 from app.db.metadata_models import DatabaseSchema, TableMetadata
 from app.schemas.retrieval import (
     RetrievedColumn,
+    RetrievalIntentHints,
     RetrievedRelationship,
     RetrievedSchemaContext,
     RetrievedTable,
@@ -15,6 +16,10 @@ CUSTOMER_TOKENS = {"customer", "customers"}
 STAFF_TOKENS = {"staff", "employee", "employees"}
 RENTAL_TOKENS = {"rental", "rentals", "rented", "rent"}
 TIME_TOKENS = {"date", "dates", "trend", "monthly", "month", "daily", "yearly", "time", "year", "day"}
+COUNT_TOKENS = {"count", "counts", "number", "many"}
+AVERAGE_TOKENS = {"average", "avg", "mean"}
+COMPARISON_TOKENS = {"compare", "comparison", "versus", "vs"}
+TOPK_TOKENS = {"top", "highest", "most", "best"}
 
 SEMANTIC_TABLE_HINTS: dict[str, set[str]] = {
     "payment": REVENUE_TOKENS | {"amount", "total", "totals", "sales"},
@@ -49,7 +54,10 @@ class RetrievalService:
         column_scores: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
 
         for table in schema.tables:
-            table_tokens = significant_tokens(table.table_name.replace("_", " "))
+            table_family = self._canonical_table_family(table.table_name)
+            table_tokens = significant_tokens(
+                f"{table.table_name.replace('_', ' ')} {table_family.replace('_', ' ')}"
+            )
             description_tokens = significant_tokens(table.description or "")
 
             exact_table_match = table.table_name.lower() in question.lower()
@@ -86,15 +94,24 @@ class RetrievalService:
         self._apply_composite_intent_boosts(schema, question_tokens, table_scores, column_scores)
 
         expanded_scores = self._expand_scores_with_relationships(schema, table_scores)
-        ranked_tables = self._rank_tables(schema, expanded_scores, column_scores, max_tables, max_columns_per_table)
+        ranked_tables = self._rank_tables(
+            schema,
+            expanded_scores,
+            column_scores,
+            question_tokens,
+            max_tables,
+            max_columns_per_table,
+        )
         relationships = self._collect_relationships(schema, ranked_tables)
         warnings = self._build_warnings(question_tokens, ranked_tables)
+        intent_hints = self._build_intent_hints(question_tokens, ranked_tables)
 
         return RetrievedSchemaContext(
             question=question,
             tables=ranked_tables,
             relationships=relationships,
             warnings=warnings,
+            intent_hints=intent_hints,
         )
 
     def build_prompt_context(self, context: RetrievedSchemaContext) -> str:
@@ -149,6 +166,7 @@ class RetrievalService:
         schema: DatabaseSchema,
         table_scores: dict[str, float],
         column_scores: dict[str, dict[str, float]],
+        question_tokens: set[str],
         max_tables: int,
         max_columns_per_table: int,
     ) -> list[RetrievedTable]:
@@ -171,6 +189,7 @@ class RetrievalService:
                 selected_columns=self._select_columns(
                     table,
                     column_scores.get(table.full_name, {}),
+                    question_tokens,
                     max_columns_per_table,
                 ),
                 related_tables=table.related_tables,
@@ -182,6 +201,7 @@ class RetrievalService:
         self,
         table: TableMetadata,
         per_column_scores: dict[str, float],
+        question_tokens: set[str],
         max_columns_per_table: int,
     ) -> list[RetrievedColumn]:
         scored_columns = sorted(
@@ -213,6 +233,23 @@ class RetrievalService:
                 break
 
         for column_name in self._required_support_columns(table):
+            if len(selected) >= max_columns_per_table or column_name in selected_names:
+                continue
+
+            column = next((candidate for candidate in table.columns if candidate.name == column_name), None)
+            if column is None:
+                continue
+
+            selected.append(
+                RetrievedColumn(
+                    name=column.name,
+                    data_type=column.data_type,
+                    score=round(per_column_scores.get(column.name, 0.0), 3),
+                )
+            )
+            selected_names.add(column.name)
+
+        for column_name in self._preferred_intent_columns(table, question_tokens):
             if len(selected) >= max_columns_per_table or column_name in selected_names:
                 continue
 
@@ -295,7 +332,10 @@ class RetrievalService:
         table: TableMetadata,
         question_tokens: set[str],
     ) -> float:
-        hint_tokens = SEMANTIC_TABLE_HINTS.get(table.table_name, set())
+        hint_tokens = SEMANTIC_TABLE_HINTS.get(
+            self._canonical_table_family(table.table_name),
+            set(),
+        )
         return len(question_tokens & hint_tokens) * 2.2
 
     def _semantic_column_boost(
@@ -313,66 +353,79 @@ class RetrievalService:
         table_scores: dict[str, float],
         column_scores: dict[str, dict[str, float]],
     ) -> None:
-        schema_table_map = {table.table_name: table for table in schema.tables}
-
         if question_tokens & REVENUE_TOKENS and question_tokens & CATEGORY_TOKENS:
             self._boost_tables(
-                schema_table_map,
+                schema,
                 table_scores,
                 ["payment", "rental", "inventory", "film_category", "category"],
                 amount=5.5,
             )
-            self._boost_columns(column_scores, "public.payment", ["amount"], amount=4.5)
+            self._boost_columns(schema, column_scores, "payment", ["amount"], amount=4.5)
 
         if question_tokens & REVENUE_TOKENS and question_tokens & CUSTOMER_TOKENS:
             self._boost_tables(
-                schema_table_map,
+                schema,
                 table_scores,
                 ["payment", "customer"],
                 amount=6.5,
             )
-            self._boost_columns(column_scores, "public.payment", ["amount", "customer_id"], amount=3.8)
+            self._boost_columns(
+                schema,
+                column_scores,
+                "payment",
+                ["amount", "customer_id"],
+                amount=3.8,
+            )
 
         if question_tokens & REVENUE_TOKENS and question_tokens & STAFF_TOKENS:
             self._boost_tables(
-                schema_table_map,
+                schema,
                 table_scores,
                 ["payment", "staff"],
                 amount=6.2,
             )
-            self._boost_columns(column_scores, "public.payment", ["amount", "staff_id"], amount=4.0)
+            self._boost_columns(
+                schema,
+                column_scores,
+                "payment",
+                ["amount", "staff_id"],
+                amount=4.0,
+            )
 
         if question_tokens & RENTAL_TOKENS and question_tokens & TIME_TOKENS:
             self._boost_tables(
-                schema_table_map,
+                schema,
                 table_scores,
                 ["rental"],
                 amount=3.5,
             )
-            self._boost_columns(column_scores, "public.rental", ["rental_date"], amount=4.0)
+            self._boost_columns(schema, column_scores, "rental", ["rental_date"], amount=4.0)
 
     def _boost_tables(
         self,
-        schema_table_map: dict[str, TableMetadata],
+        schema: DatabaseSchema,
         table_scores: dict[str, float],
-        table_names: list[str],
+        table_families: list[str],
         amount: float,
     ) -> None:
-        for table_name in table_names:
-            table = schema_table_map.get(table_name)
-            if table is None:
-                continue
-            table_scores[table.full_name] += amount
+        for table in schema.tables:
+            if self._canonical_table_family(table.table_name) in table_families:
+                table_scores[table.full_name] += amount
 
     def _boost_columns(
         self,
+        schema: DatabaseSchema,
         column_scores: dict[str, dict[str, float]],
-        table_full_name: str,
+        table_family: str,
         column_names: list[str],
         amount: float,
     ) -> None:
-        for column_name in column_names:
-            column_scores[table_full_name][column_name] += amount
+        for table in schema.tables:
+            if self._canonical_table_family(table.table_name) != table_family:
+                continue
+            for column_name in column_names:
+                if any(column.name == column_name for column in table.columns):
+                    column_scores[table.full_name][column_name] += amount
 
     def _required_support_columns(self, table: TableMetadata) -> list[str]:
         required_columns: list[str] = []
@@ -391,3 +444,110 @@ class RetrievalService:
                 required_columns.append(preferred_column)
 
         return required_columns
+
+    def _preferred_intent_columns(
+        self,
+        table: TableMetadata,
+        question_tokens: set[str],
+    ) -> list[str]:
+        preferred: list[str] = []
+        available_names = {column.name for column in table.columns}
+
+        if question_tokens & REVENUE_TOKENS:
+            for column_name in ("amount", "total_revenue", "total_spent", "revenue"):
+                if column_name in available_names and column_name not in preferred:
+                    preferred.append(column_name)
+
+        if question_tokens & COUNT_TOKENS:
+            for column_name in ("rental_count", "payment_count", "count"):
+                if column_name in available_names and column_name not in preferred:
+                    preferred.append(column_name)
+
+        if question_tokens & AVERAGE_TOKENS:
+            for column_name in ("avg_amount", "average_amount", "avg_rental_duration"):
+                if column_name in available_names and column_name not in preferred:
+                    preferred.append(column_name)
+
+        if question_tokens & TIME_TOKENS:
+            for column_name in ("payment_date", "rental_date", "last_update"):
+                if column_name in available_names and column_name not in preferred:
+                    preferred.append(column_name)
+
+        if question_tokens & CUSTOMER_TOKENS:
+            for column_name in ("customer_id", "first_name", "last_name"):
+                if column_name in available_names and column_name not in preferred:
+                    preferred.append(column_name)
+
+        if question_tokens & STAFF_TOKENS:
+            for column_name in ("staff_id", "first_name", "last_name"):
+                if column_name in available_names and column_name not in preferred:
+                    preferred.append(column_name)
+
+        if question_tokens & CATEGORY_TOKENS:
+            for column_name in ("name", "category_id"):
+                if column_name in available_names and column_name not in preferred:
+                    preferred.append(column_name)
+
+        return preferred
+
+    def _build_intent_hints(
+        self,
+        question_tokens: set[str],
+        tables: list[RetrievedTable],
+    ) -> RetrievalIntentHints:
+        intent_tags: list[str] = []
+        if question_tokens & REVENUE_TOKENS:
+            intent_tags.append("revenue")
+        if question_tokens & COUNT_TOKENS:
+            intent_tags.append("count")
+        if question_tokens & AVERAGE_TOKENS:
+            intent_tags.append("average")
+        if question_tokens & TIME_TOKENS:
+            intent_tags.append("time")
+        if question_tokens & COMPARISON_TOKENS:
+            intent_tags.append("comparison")
+        if question_tokens & TOPK_TOKENS:
+            intent_tags.append("ranking")
+
+        metric_hints: list[str] = []
+        if "revenue" in intent_tags:
+            metric_hints.extend(["amount", "total_spent", "total_revenue", "revenue"])
+        if "count" in intent_tags:
+            metric_hints.extend(["count", "rental_count", "payment_count"])
+        if "average" in intent_tags:
+            metric_hints.extend(["avg_amount", "average_amount"])
+
+        dimension_hints: list[str] = []
+        if question_tokens & CUSTOMER_TOKENS:
+            dimension_hints.extend(["customer_id", "first_name", "last_name"])
+        if question_tokens & STAFF_TOKENS:
+            dimension_hints.extend(["staff_id", "first_name", "last_name"])
+        if question_tokens & CATEGORY_TOKENS:
+            dimension_hints.extend(["name", "category_id"])
+
+        time_hints = []
+        if question_tokens & TIME_TOKENS:
+            time_hints.extend(["payment_date", "rental_date"])
+
+        table_family_hints = list(
+            dict.fromkeys(
+                self._canonical_table_family(table.table_name)
+                for table in tables
+            )
+        )
+
+        return RetrievalIntentHints(
+            intent_tags=intent_tags,
+            metric_hints=metric_hints,
+            dimension_hints=dimension_hints,
+            time_hints=time_hints,
+            table_family_hints=table_family_hints,
+        )
+
+    def _canonical_table_family(self, table_name: str) -> str:
+        normalized_name = table_name.lower()
+        if normalized_name.startswith("payment_p"):
+            return "payment"
+        if normalized_name.endswith("_list"):
+            return normalized_name[: -len("_list")]
+        return normalized_name

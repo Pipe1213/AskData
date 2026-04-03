@@ -23,8 +23,17 @@ class RetrievedRelationship(BaseModel):
     target_columns: list[str] = Field(default_factory=list)
 
 
+class RetrievalIntentHints(BaseModel):
+    intent_tags: list[str] = Field(default_factory=list)
+    metric_hints: list[str] = Field(default_factory=list)
+    dimension_hints: list[str] = Field(default_factory=list)
+    time_hints: list[str] = Field(default_factory=list)
+    table_family_hints: list[str] = Field(default_factory=list)
+
+
 class RetrievedSchemaContext(BaseModel):
     question: str
     tables: list[RetrievedTable] = Field(default_factory=list)
     relationships: list[RetrievedRelationship] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    intent_hints: RetrievalIntentHints = Field(default_factory=RetrievalIntentHints)

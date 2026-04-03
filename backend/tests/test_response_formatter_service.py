@@ -87,6 +87,50 @@ def test_response_formatter_prefers_label_and_metric_over_identifier_columns() -
     assert response.chart_recommendation.y == "total_spent"
 
 
+def test_response_formatter_returns_clear_no_result_summary() -> None:
+    service = ResponseFormatterService(settings=SimpleNamespace(openai_api_key=None))
+    execution_result = SQLExecutionResult(
+        sql="SELECT * FROM rental WHERE EXTRACT(YEAR FROM rental_date) = 1990",
+        success=True,
+        columns=["rental_id"],
+        rows=[],
+        row_count=0,
+    )
+
+    response = service.format_query_response(
+        question="Show rentals from the year 1990.",
+        generated_sql=execution_result.sql,
+        execution_result=execution_result,
+        used_tables=["public.rental"],
+        warnings=[],
+    )
+
+    assert "successfully" in response.answer_summary.lower()
+    assert response.chart_recommendation.type == "table_only"
+
+
+def test_response_formatter_prefers_revenue_metric_over_count_for_spend_question() -> None:
+    service = ResponseFormatterService(settings=SimpleNamespace(openai_api_key=None))
+    execution_result = SQLExecutionResult(
+        sql="SELECT first_name, payment_count, total_spent FROM report",
+        success=True,
+        columns=["first_name", "payment_count", "total_spent"],
+        rows=[["MARION", 13, Decimal("64.87")], ["ANA", 9, Decimal("58.91")]],
+        row_count=2,
+    )
+
+    response = service.format_query_response(
+        question="Which customers spent the most in total?",
+        generated_sql=execution_result.sql,
+        execution_result=execution_result,
+        used_tables=["public.customer", "public.payment"],
+        warnings=[],
+    )
+
+    assert "total_spent=64.87" in response.answer_summary
+    assert response.chart_recommendation.y == "total_spent"
+
+
 def test_response_formatter_avoids_chart_for_large_result_sets() -> None:
     service = ResponseFormatterService(settings=SimpleNamespace(openai_api_key=None))
     rows = [[f"customer_{index}", index * 10] for index in range(30)]

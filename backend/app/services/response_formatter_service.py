@@ -7,6 +7,7 @@ from app.llm.prompt_builders import build_answer_summary_messages
 from app.llm.response_models import LLMGenerationConfig, LLMMessage
 from app.schemas.execution import SQLExecutionResult
 from app.schemas.query import ChartRecommendation, QueryResponse
+from app.utils.text import significant_tokens
 
 
 class ResponseFormatterService:
@@ -44,7 +45,7 @@ class ResponseFormatterService:
             columns=execution_result.columns,
             rows=execution_result.rows,
             row_count=execution_result.row_count,
-            chart_recommendation=self._recommend_chart(execution_result),
+            chart_recommendation=self._recommend_chart(question, execution_result),
             warnings=merged_warnings,
             used_tables=sorted(set(used_tables)),
             repaired=repaired,
@@ -58,7 +59,7 @@ class ResponseFormatterService:
     ) -> str:
         llm_client = self._get_llm_client()
         if llm_client is None:
-            return self._fallback_summary(execution_result)
+            return self._fallback_summary(question, execution_result)
 
         try:
             messages = build_answer_summary_messages(
@@ -80,7 +81,7 @@ class ResponseFormatterService:
         except LLMClientError:
             pass
 
-        return self._fallback_summary(execution_result)
+        return self._fallback_summary(question, execution_result)
 
     def _get_llm_client(self) -> BaseLLMClient | None:
         if self.llm_client is not None:
@@ -89,12 +90,19 @@ class ResponseFormatterService:
         if not self.settings.openai_api_key:
             return None
 
-        self.llm_client = OpenAILLMClient(self.settings)
+        self.llm_client = OpenAILLMClient(
+            self.settings,
+            model=self.settings.resolved_summary_model,
+        )
         return self.llm_client
 
-    def _fallback_summary(self, execution_result: SQLExecutionResult) -> str:
+    def _fallback_summary(
+        self,
+        question: str,
+        execution_result: SQLExecutionResult,
+    ) -> str:
         if execution_result.row_count == 0:
-            return "The query returned no rows."
+            return "The query ran successfully but returned no matching rows."
 
         if execution_result.row_count == 1 and len(execution_result.columns) == 1:
             return f"The result is {execution_result.rows[0][0]}."
@@ -117,9 +125,10 @@ class ResponseFormatterService:
                 first_row,
             )
             metric_index = self._find_numeric_column_index(
-                execution_result.rows,
-                execution_result.columns,
+                rows=execution_result.rows,
+                columns=execution_result.columns,
                 preferred_after_index=label_index,
+                question=question,
             )
 
             if (
@@ -150,6 +159,7 @@ class ResponseFormatterService:
 
     def _recommend_chart(
         self,
+        question: str,
         execution_result: SQLExecutionResult,
     ) -> ChartRecommendation:
         columns = execution_result.columns
@@ -166,9 +176,10 @@ class ResponseFormatterService:
             x_index = 0
 
         y_index = self._find_numeric_column_index(
-            rows,
-            columns,
+            rows=rows,
+            columns=columns,
             preferred_after_index=x_index,
+            question=question,
         )
         if y_index is None or y_index == x_index:
             return ChartRecommendation(type="table_only")
@@ -186,42 +197,39 @@ class ResponseFormatterService:
         rows: list[list[object]],
         columns: list[str] | None = None,
         preferred_after_index: int | None = None,
+        question: str | None = None,
     ) -> int | None:
         if not rows:
             return None
 
         first_row = rows[0]
         candidate_indices = list(range(len(first_row)))
+        question_tokens = significant_tokens(question or "")
 
         if preferred_after_index is not None:
             candidate_indices = [
                 index for index in candidate_indices
                 if index != preferred_after_index
             ]
-            candidate_indices.sort(key=lambda index: (index <= preferred_after_index, index))
 
-        prioritized_indices: list[int] = []
-        if columns is not None:
-            metric_like_indices = [
-                index
-                for index in candidate_indices
-                if not columns[index].lower().endswith("_id")
-            ]
-            prioritized_indices.extend(metric_like_indices)
-            prioritized_indices.extend(
-                index for index in candidate_indices if index not in metric_like_indices
-            )
-        else:
-            prioritized_indices = candidate_indices
-
-        for index in prioritized_indices:
+        scored_candidates: list[tuple[float, int]] = []
+        for index in candidate_indices:
             value = first_row[index]
             if isinstance(value, bool):
                 continue
             if isinstance(value, Number):
-                return index
+                score = 0.0
+                if columns is not None:
+                    score += self._metric_column_score(columns[index], question_tokens)
+                    if not columns[index].lower().endswith("_id"):
+                        score += 1.0
+                scored_candidates.append((score, index))
 
-        return None
+        if not scored_candidates:
+            return None
+
+        scored_candidates.sort(key=lambda item: (-item[0], item[1]))
+        return scored_candidates[0][1]
 
     def _find_label_column_index(
         self,
@@ -241,3 +249,41 @@ class ResponseFormatterService:
     def _looks_like_time_column(self, column_name: str) -> bool:
         normalized_name = column_name.lower()
         return any(token in normalized_name for token in ("date", "time", "month", "year", "day"))
+
+    def _metric_column_score(self, column_name: str, question_tokens: set[str]) -> float:
+        normalized_name = column_name.lower()
+        score = 0.0
+
+        if normalized_name.endswith("_id"):
+            score -= 8.0
+
+        revenue_tokens = {"revenue", "sale", "sales", "spend", "spent", "earning", "earnings"}
+        count_tokens = {"count", "counts", "number", "many"}
+        average_tokens = {"average", "avg", "mean"}
+
+        if question_tokens & revenue_tokens:
+            if any(token in normalized_name for token in ("revenue", "spent", "amount", "total", "sales")):
+                score += 9.0
+            if "count" in normalized_name:
+                score += 1.5
+
+        if question_tokens & count_tokens:
+            if "count" in normalized_name:
+                score += 8.0
+            if any(token in normalized_name for token in ("total", "amount", "revenue")):
+                score += 1.0
+
+        if question_tokens & average_tokens:
+            if any(token in normalized_name for token in ("avg", "average", "mean")):
+                score += 8.0
+
+        if question_tokens & {"rental", "rentals", "rented"} and "count" in normalized_name:
+            score += 4.0
+
+        if any(
+            token in normalized_name
+            for token in ("total", "revenue", "spent", "amount", "count", "avg", "average")
+        ):
+            score += 2.5
+
+        return score

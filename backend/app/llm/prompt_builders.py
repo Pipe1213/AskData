@@ -42,6 +42,9 @@ Recent conversation context:
 Retrieved schema context:
 {_format_schema_context(schema_context)}
 
+Intent hints:
+{_format_intent_hints(schema_context)}
+
 Return:
 - `sql`: the generated PostgreSQL query
 - `used_tables`: the tables used by the query
@@ -79,6 +82,24 @@ def _format_schema_context(schema_context: RetrievedSchemaContext) -> str:
         sections.append("Retrieval warnings:\n" + "\n".join(warning_lines))
 
     return "\n\n".join(sections)
+
+
+def _format_intent_hints(schema_context: RetrievedSchemaContext) -> str:
+    hints = schema_context.intent_hints
+    sections: list[str] = []
+
+    if hints.intent_tags:
+        sections.append("Intent tags: " + ", ".join(hints.intent_tags))
+    if hints.metric_hints:
+        sections.append("Metric hints: " + ", ".join(hints.metric_hints))
+    if hints.dimension_hints:
+        sections.append("Dimension hints: " + ", ".join(hints.dimension_hints))
+    if hints.time_hints:
+        sections.append("Time hints: " + ", ".join(hints.time_hints))
+    if hints.table_family_hints:
+        sections.append("Table families: " + ", ".join(hints.table_family_hints))
+
+    return "\n".join(sections) if sections else "None"
 
 
 def _format_conversation_context(
@@ -165,6 +186,9 @@ Recent conversation context:
 Retrieved schema context:
 {_format_schema_context(schema_context)}
 
+Intent hints:
+{_format_intent_hints(schema_context)}
+
 Previous SQL:
 {previous_sql}
 
@@ -204,3 +228,49 @@ def _build_pagila_domain_hints(question: str) -> str:
         hints.append("- Rental trends usually rely on rental.rental_date; payment trends usually rely on payment.payment_date.")
 
     return "\n".join(hints)
+
+
+def build_sql_semantic_review_messages(
+    question: str,
+    schema_context: RetrievedSchemaContext,
+    generated_sql: str,
+    conversation_context: list[ConversationMessage] | None = None,
+) -> list[dict[str, str]]:
+    system_prompt = """
+You review a generated PostgreSQL analytics query before execution.
+Decide whether the SQL appears to answer the user's business question correctly enough to continue.
+
+Rules:
+- Focus on business intent alignment, not syntax.
+- Check whether the likely metric, grouping, and time/filter logic match the question.
+- Be strict about obviously wrong interpretations.
+- Do not suggest destructive SQL.
+- Return structured JSON matching the required schema.
+""".strip()
+
+    user_prompt = f"""
+User question:
+{question}
+
+Recent conversation context:
+{_format_conversation_context(conversation_context)}
+
+Retrieved schema context:
+{_format_schema_context(schema_context)}
+
+Intent hints:
+{_format_intent_hints(schema_context)}
+
+Candidate SQL:
+{generated_sql}
+
+Return:
+- `should_rewrite`: true if the SQL likely answers the wrong business question or uses the wrong metric/grouping/time logic
+- `issues`: short concrete reasons
+- `suggested_focus`: one short instruction for what the corrected SQL should focus on
+""".strip()
+
+    return [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]

@@ -18,14 +18,14 @@ StructuredOutputT = TypeVar("StructuredOutputT", bound=BaseModel)
 class OpenAILLMClient(BaseLLMClient):
     provider_name = "openai"
 
-    def __init__(self, settings: Settings | None = None) -> None:
+    def __init__(self, settings: Settings | None = None, model: str | None = None) -> None:
         self.settings = settings or get_settings()
 
         if not self.settings.openai_api_key:
             raise LLMClientError("OPENAI_API_KEY is required to initialize the OpenAI client.")
 
         self.client = OpenAI(api_key=self.settings.openai_api_key)
-        self.model = self.settings.openai_model
+        self.model = model or self.settings.resolved_summary_model
 
     def generate_text(
         self,

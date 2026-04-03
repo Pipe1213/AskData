@@ -33,7 +33,17 @@ class Settings(BaseSettings):
     )
 
     openai_api_key: str | None = Field(default=None, alias="OPENAI_API_KEY")
-    openai_model: str = Field(default="gpt-5-mini", alias="OPENAI_MODEL")
+    openai_model: str | None = Field(default=None, alias="OPENAI_MODEL")
+    openai_sql_model: str | None = Field(default=None, alias="OPENAI_SQL_MODEL")
+    openai_summary_model: str | None = Field(default=None, alias="OPENAI_SUMMARY_MODEL")
+
+    @property
+    def resolved_sql_model(self) -> str:
+        return self.openai_sql_model or self.openai_model or "gpt-5.1"
+
+    @property
+    def resolved_summary_model(self) -> str:
+        return self.openai_summary_model or self.openai_model or "gpt-5-mini"
 
 
 @lru_cache

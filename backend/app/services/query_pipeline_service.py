@@ -95,6 +95,13 @@ class QueryPipelineService:
                 retryable=True,
             ) from exc
 
+        generation_result, semantic_review_warnings = self._apply_semantic_review(
+            question=normalized_question,
+            retrieval_context=retrieval_context,
+            generation_result=generation_result,
+            conversation_context=normalized_conversation_context,
+        )
+
         pipeline_result = self._validate_and_execute_once(
             question=normalized_question,
             retrieval_context=retrieval_context,
@@ -112,6 +119,7 @@ class QueryPipelineService:
             *retrieval_context.warnings,
             *pipeline_result["generation_result"].notes,
             *pipeline_result["validation_result"].warnings,
+            *semantic_review_warnings,
             *pipeline_result["repair_warnings"],
         ]
 
@@ -124,7 +132,7 @@ class QueryPipelineService:
             execution_result=pipeline_result["execution_result"],
             used_tables=used_tables,
             warnings=merged_warnings,
-            repaired=bool(pipeline_result["repair_warnings"]),
+            repaired=bool(pipeline_result["repair_warnings"] or semantic_review_warnings),
         )
         if self.settings.debug_mode:
             return response.model_copy(
@@ -140,6 +148,46 @@ class QueryPipelineService:
             )
 
         return response
+
+    def _apply_semantic_review(
+        self,
+        question: str,
+        retrieval_context,
+        generation_result,
+        conversation_context: list[ConversationMessage],
+    ):
+        if not hasattr(self.sql_generation_service, "review_sql"):
+            return generation_result, []
+
+        try:
+            review_result = self.sql_generation_service.review_sql(
+                question=question,
+                schema_context=retrieval_context,
+                generated_sql=generation_result.sql,
+                conversation_context=conversation_context,
+            )
+        except LLMClientError:
+            return generation_result, []
+
+        if not review_result.should_rewrite:
+            return generation_result, []
+
+        issues = [issue.strip() for issue in review_result.issues if issue.strip()]
+        if review_result.suggested_focus:
+            issues.append(review_result.suggested_focus.strip())
+
+        try:
+            rewritten = self.sql_generation_service.repair_sql(
+                question=question,
+                schema_context=retrieval_context,
+                previous_sql=generation_result.sql,
+                failure_message="Semantic review: " + "; ".join(issues or ["Refocus the SQL on the user's business intent."]),
+                conversation_context=conversation_context,
+            )
+        except LLMClientError:
+            return generation_result, []
+
+        return rewritten, ["SQL was rewritten once after a semantic review."]
 
     def _validate_and_execute_once(
         self,
