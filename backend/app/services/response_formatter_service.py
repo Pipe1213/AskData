@@ -25,6 +25,7 @@ class ResponseFormatterService:
         execution_result: SQLExecutionResult,
         used_tables: list[str],
         warnings: list[str] | None = None,
+        repaired: bool = False,
     ) -> QueryResponse:
         if not execution_result.success:
             raise ValueError("Execution result must be successful before formatting a query response.")
@@ -42,9 +43,11 @@ class ResponseFormatterService:
             generated_sql=generated_sql,
             columns=execution_result.columns,
             rows=execution_result.rows,
+            row_count=execution_result.row_count,
             chart_recommendation=self._recommend_chart(execution_result),
             warnings=merged_warnings,
             used_tables=sorted(set(used_tables)),
+            repaired=repaired,
         )
 
     def _build_answer_summary(

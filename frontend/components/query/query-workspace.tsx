@@ -13,9 +13,16 @@ import type { ConversationTurn } from "@/lib/types";
 type QueryWorkspaceProps = {
   turns: ConversationTurn[];
   isLoading: boolean;
+  onRerunTurn: (turnId: string, question: string) => void;
+  onExportTurn: (turnId: string) => void;
 };
 
-export function QueryWorkspace({ turns, isLoading }: QueryWorkspaceProps) {
+export function QueryWorkspace({
+  turns,
+  isLoading,
+  onRerunTurn,
+  onExportTurn,
+}: QueryWorkspaceProps) {
   const conversationEndRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -42,7 +49,13 @@ export function QueryWorkspace({ turns, isLoading }: QueryWorkspaceProps) {
 
             {turn.status === "loading" ? <LoadingReply /> : null}
             {turn.status === "error" ? <ErrorReply warnings={turn.error.warnings} message={turn.error.error.message} /> : null}
-            {turn.status === "success" ? <SuccessReply turn={turn} /> : null}
+            {turn.status === "success" ? (
+              <SuccessReply
+                turn={turn}
+                onExportTurn={onExportTurn}
+                onRerunTurn={onRerunTurn}
+              />
+            ) : null}
           </div>
         ))}
 
@@ -80,18 +93,33 @@ function UserBubble({ children }: { children: string }) {
 }
 
 function LoadingReply() {
+  const loadingSteps = [
+    "Understanding question",
+    "Generating SQL",
+    "Validating query",
+    "Running query",
+  ];
+
   return (
     <AssistantFrame>
-      <div className="flex items-center gap-4">
-        <div className="flex items-center gap-2">
-          <span className="typing-dot" />
-          <span className="typing-dot animation-delay-150" />
-          <span className="typing-dot animation-delay-300" />
+      <div className="space-y-4">
+        <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2">
+            <span className="typing-dot" />
+            <span className="typing-dot animation-delay-150" />
+            <span className="typing-dot animation-delay-300" />
+          </div>
+          <p className="text-sm leading-6 text-muted">
+            AskData is preparing the next answer.
+          </p>
         </div>
-        <p className="text-sm leading-6 text-muted">
-          AskData is retrieving schema context, generating SQL, validating it, and preparing the
-          answer.
-        </p>
+        <div className="flex flex-wrap gap-2">
+          {loadingSteps.map((step) => (
+            <span key={step} className="chip">
+              {step}
+            </span>
+          ))}
+        </div>
       </div>
     </AssistantFrame>
   );
@@ -130,12 +158,17 @@ function ErrorReply({
 
 function SuccessReply({
   turn,
+  onRerunTurn,
+  onExportTurn,
 }: {
   turn: Extract<ConversationTurn, { status: "success" }>;
+  onRerunTurn: (turnId: string, question: string) => void;
+  onExportTurn: (turnId: string) => void;
 }) {
   const queryResult = turn.response;
   const shouldShowChart =
     canRenderChart(queryResult.chart_recommendation) && queryResult.rows.length > 0;
+  const isNoResult = queryResult.row_count === 0;
 
   return (
     <AssistantFrame>
@@ -148,11 +181,41 @@ function SuccessReply({
             {queryResult.answer_summary}
           </h3>
           <div className="flex flex-wrap gap-2">
-            <span className="chip">{queryResult.rows.length} rows</span>
+            <span className="chip">{queryResult.row_count} rows</span>
             <span className="chip">{queryResult.columns.length} columns</span>
             <span className="chip">{queryResult.chart_recommendation.type}</span>
+            {queryResult.repaired ? <span className="chip">repaired once</span> : null}
+            {queryResult.created_at ? <span className="chip">{formatTurnTime(queryResult.created_at)}</span> : null}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => onRerunTurn(turn.id, turn.question)}
+              className="chip cursor-pointer transition hover:border-accent hover:text-accent"
+            >
+              Rerun
+            </button>
+            <button
+              type="button"
+              onClick={() => onExportTurn(turn.id)}
+              className="chip cursor-pointer transition hover:border-accent hover:text-accent"
+            >
+              Export CSV
+            </button>
           </div>
         </div>
+
+        {isNoResult ? (
+          <div className="rounded-[24px] border border-line bg-white/72 px-5 py-5">
+            <p className="text-sm font-semibold uppercase tracking-[0.16em] text-muted">
+              No matching data
+            </p>
+            <p className="mt-3 text-sm leading-7 text-muted md:text-base">
+              The query completed successfully, but it did not find rows matching the current
+              filters.
+            </p>
+          </div>
+        ) : null}
 
         {shouldShowChart ? (
           <ChartPanel
@@ -174,6 +237,7 @@ function SuccessReply({
               <ResultsTable
                 columns={queryResult.columns}
                 rows={queryResult.rows}
+                totalRowCount={queryResult.row_count}
                 isLoading={false}
                 variant="embedded"
               />
@@ -214,4 +278,18 @@ function SuccessReply({
       </div>
     </AssistantFrame>
   );
+}
+
+function formatTurnTime(createdAt: string): string {
+  const date = new Date(createdAt);
+  if (Number.isNaN(date.getTime())) {
+    return "saved";
+  }
+
+  return date.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
 }

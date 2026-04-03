@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     app_env: str = Field(default="development", alias="ASKDATA_ENV")
     app_version: str = Field(default="0.1.0", alias="ASKDATA_APP_VERSION")
     log_level: str = Field(default="INFO", alias="ASKDATA_LOG_LEVEL")
+    debug_mode: bool = Field(default=False, alias="ASKDATA_DEBUG_MODE")
 
     query_timeout_seconds: int = Field(default=10, alias="QUERY_TIMEOUT_SECONDS")
     max_result_rows: int = Field(default=200, alias="MAX_RESULT_ROWS")

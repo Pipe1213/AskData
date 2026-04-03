@@ -8,10 +8,12 @@ from app.api.routes_examples import router as examples_router
 from app.api.routes_health import router as health_router
 from app.api.routes_query import router as query_router
 from app.api.routes_schema import router as schema_router
+from app.api.routes_sessions import router as sessions_router
 from app.core.config import get_settings
 from app.core.logging import setup_logging
 from app.services.query_pipeline_service import QueryPipelineService
 from app.services.schema_service import SchemaService
+from app.services.session_service import SessionService
 
 
 @asynccontextmanager
@@ -21,12 +23,20 @@ async def lifespan(app: FastAPI):
     logger = logging.getLogger(__name__)
     schema_service = SchemaService(settings)
     query_pipeline_service = QueryPipelineService(settings=settings)
+    session_service = SessionService(settings=settings)
 
     logger.info("Starting %s in %s mode", settings.app_name, settings.app_env)
     app.state.schema_service = schema_service
     app.state.query_pipeline_service = query_pipeline_service
+    app.state.session_service = session_service
     app.state.schema_cache = None
     app.state.schema_cache_error = None
+
+    try:
+        session_service.initialize_storage()
+        logger.info("Initialized AskData app persistence storage")
+    except Exception:
+        logger.exception("Failed to initialize AskData app persistence storage")
 
     try:
         app.state.schema_cache = schema_service.load_schema()
@@ -54,13 +64,14 @@ def create_app() -> FastAPI:
         CORSMiddleware,
         allow_origins=settings.cors_allowed_origins,
         allow_credentials=False,
-        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
         allow_headers=["*"],
     )
     app.include_router(examples_router)
     app.include_router(health_router)
     app.include_router(query_router)
     app.include_router(schema_router)
+    app.include_router(sessions_router)
     return app
 
 

@@ -9,6 +9,7 @@ const sampleRows = [
 type ResultsTableProps = {
   columns?: string[];
   rows?: Array<Array<unknown>>;
+  totalRowCount?: number;
   isLoading: boolean;
   variant?: "panel" | "embedded";
 };
@@ -16,12 +17,15 @@ type ResultsTableProps = {
 export function ResultsTable({
   columns,
   rows,
+  totalRowCount,
   isLoading,
   variant = "panel",
 }: ResultsTableProps) {
   const displayColumns = columns && columns.length > 0 ? columns : sampleColumns;
-  const displayRows = rows && rows.length > 0 ? rows : sampleRows;
-  const isPlaceholder = !rows || rows.length === 0;
+  const hasLiveRows = Array.isArray(rows);
+  const displayRows = hasLiveRows && rows.length > 0 ? rows : sampleRows;
+  const isPlaceholder = !hasLiveRows;
+  const isNoResult = hasLiveRows && rows.length === 0;
   const previewRows = displayRows.slice(0, 12);
   const wrapperClass =
     variant === "embedded" ? "rounded-[24px] border border-line bg-white/85 p-4" : "panel p-5";
@@ -42,10 +46,13 @@ export function ResultsTable({
       <p className={`${variant === "panel" ? "mt-3" : "mb-4"} text-sm leading-6 text-muted`}>
         {isLoading
           ? "Waiting for row data from the backend."
+          : isNoResult
+            ? "The query ran successfully but returned no matching rows."
           : isPlaceholder
             ? "No live result yet. These placeholder rows show how the result table will look."
-            : `Rendering a preview of ${previewRows.length} rows from a total of ${displayRows.length} returned by the backend.`}
+            : `Rendering a preview of ${previewRows.length} rows from a total of ${totalRowCount ?? displayRows.length} returned by the backend.`}
       </p>
+      {!isNoResult ? (
       <div className="mt-4 overflow-hidden rounded-[24px] border border-line">
         <div className="overflow-x-auto">
         <table className="min-w-full border-collapse bg-white">
@@ -78,7 +85,8 @@ export function ResultsTable({
         </table>
         </div>
       </div>
-      {!isPlaceholder && displayRows.length > previewRows.length ? (
+      ) : null}
+      {!isPlaceholder && !isNoResult && displayRows.length > previewRows.length ? (
         <p className="mt-3 text-sm leading-6 text-muted">
           Only the first {previewRows.length} rows are shown in the preview. The backend
           may still return more rows within its response cap.

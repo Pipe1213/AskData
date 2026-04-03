@@ -2,7 +2,7 @@ from app.core.config import Settings, get_settings
 from app.core.exceptions import QueryPipelineError
 from app.db.metadata_models import DatabaseSchema
 from app.llm.base import LLMClientError
-from app.schemas.query import ConversationMessage, QueryResponse
+from app.schemas.query import ConversationMessage, DebugPayload, QueryResponse
 from app.services.response_formatter_service import ResponseFormatterService
 from app.services.retrieval_service import RetrievalService
 from app.services.sql_execution_service import SQLExecutionService
@@ -115,7 +115,7 @@ class QueryPipelineService:
             *pipeline_result["repair_warnings"],
         ]
 
-        return self.response_formatter_service.format_query_response(
+        response = self.response_formatter_service.format_query_response(
             question=normalized_question,
             generated_sql=(
                 pipeline_result["validation_result"].validated_sql
@@ -124,7 +124,22 @@ class QueryPipelineService:
             execution_result=pipeline_result["execution_result"],
             used_tables=used_tables,
             warnings=merged_warnings,
+            repaired=bool(pipeline_result["repair_warnings"]),
         )
+        if self.settings.debug_mode:
+            return response.model_copy(
+                update={
+                    "debug": DebugPayload(
+                        stage="success",
+                        retrieval_tables=[table.full_name for table in retrieval_context.tables],
+                        validation_classification=pipeline_result["validation_result"].classification,
+                        detected_tables=pipeline_result["validation_result"].detected_tables,
+                        repair_attempted=bool(pipeline_result["repair_warnings"]),
+                    )
+                }
+            )
+
+        return response
 
     def _validate_and_execute_once(
         self,

@@ -1,0 +1,62 @@
+[
+  {
+    "category": "ranking",
+    "question": "Which 10 customers spent the most in total?"
+  },
+  {
+    "category": "ranking",
+    "question": "What are the top 10 film categories by total revenue?"
+  },
+  {
+    "category": "aggregation",
+    "question": "How much revenue did each staff member process?"
+  },
+  {
+    "category": "time",
+    "question": "How many rentals happened each month?"
+  },
+  {
+    "category": "time",
+    "question": "What is the monthly trend of rentals this year?"
+  },
+  {
+    "category": "join",
+    "question": "Which tables contain payment information?"
+  },
+  {
+    "category": "comparison",
+    "question": "Compare average rental duration by film category."
+  },
+  {
+    "category": "follow_up",
+    "question": "Now show only the top 5",
+    "conversation_context": [
+      {
+        "role": "user",
+        "content": "Which 10 customers spent the most in total?"
+      },
+      {
+        "role": "assistant",
+        "content": "The top customers by total payment amount were returned in descending order."
+      }
+    ]
+  },
+  {
+    "category": "follow_up",
+    "question": "Group this by month",
+    "conversation_context": [
+      {
+        "role": "user",
+        "content": "How much revenue did each staff member process?"
+      },
+      {
+        "role": "assistant",
+        "content": "The answer reported revenue totals per staff member."
+      }
+    ]
+  },
+  {
+    "category": "no_result",
+    "question": "Show rentals from the year 1990."
+  }
+]

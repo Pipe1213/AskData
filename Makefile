@@ -1,4 +1,4 @@
-.PHONY: docker-up docker-down docker-logs backend-install backend-dev frontend-install frontend-dev test-backend lint-frontend build-frontend verify
+.PHONY: docker-up docker-down docker-logs backend-install backend-dev frontend-install frontend-dev test-backend lint-frontend build-frontend benchmark-backend verify
 
 docker-up:
 	docker compose up -d postgres
@@ -29,5 +29,8 @@ lint-frontend:
 
 build-frontend:
 	cd frontend && npm run build
+
+benchmark-backend:
+	cd backend && .venv/bin/python scripts/run_benchmark.py
 
 verify: test-backend lint-frontend build-frontend

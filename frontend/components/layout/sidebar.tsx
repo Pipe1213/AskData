@@ -1,5 +1,6 @@
 import { ExamplePrompts } from "@/components/query/example-prompts";
 import { UsedTablesPanel } from "@/components/result/used-tables-panel";
+import type { ExamplePromptGroup, SessionSummary } from "@/lib/types";
 
 type SidebarView = "chat" | "schema";
 
@@ -8,9 +9,13 @@ type SidebarProps = {
   collapsed: boolean;
   onSelectView: (view: SidebarView) => void;
   onToggleCollapse: () => void;
-  prompts: string[];
+  promptGroups: ExamplePromptGroup[];
   onNewChat: () => void;
   onSelectPrompt: (prompt: string) => void;
+  sessions: SessionSummary[];
+  activeSessionId: string | null;
+  onSelectSession: (sessionId: string) => void;
+  onRenameSession: () => void;
   warnings: string[];
   usedTables: string[];
   isLoading: boolean;
@@ -21,9 +26,13 @@ export function Sidebar({
   collapsed,
   onSelectView,
   onToggleCollapse,
-  prompts,
+  promptGroups,
   onNewChat,
   onSelectPrompt,
+  sessions,
+  activeSessionId,
+  onSelectSession,
+  onRenameSession,
   warnings,
   usedTables,
   isLoading,
@@ -112,8 +121,54 @@ export function Sidebar({
 
       {!collapsed ? (
         <section className="mt-6 border-t border-line pt-6">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="eyebrow">History</div>
+              <h2 className="section-title mt-4">Recent sessions</h2>
+            </div>
+            {activeSessionId ? (
+              <button
+                type="button"
+                onClick={onRenameSession}
+                className="text-sm font-medium text-accent transition hover:opacity-80"
+              >
+                Rename
+              </button>
+            ) : null}
+          </div>
+          <div className="mt-4 space-y-2">
+            {sessions.length > 0 ? (
+              sessions.map((session) => (
+                <button
+                  key={session.id}
+                  type="button"
+                  onClick={() => onSelectSession(session.id)}
+                  className={`flex w-full flex-col items-start rounded-[20px] px-3 py-3 text-left transition ${
+                    session.id === activeSessionId
+                      ? "bg-accentSoft text-accent"
+                      : "hover:bg-white/70"
+                  }`}
+                >
+                  <span className="text-sm font-semibold leading-6">{session.title}</span>
+                  <span className="text-xs leading-5 text-muted">
+                    {session.turn_count} turns
+                    {session.last_status ? ` · ${session.last_status}` : ""}
+                  </span>
+                </button>
+              ))
+            ) : (
+              <p className="text-sm leading-6 text-muted">
+                Session history appears here after the first persisted question.
+              </p>
+            )}
+          </div>
+        </section>
+      ) : null}
+
+      {!collapsed ? (
+        <section className="mt-6 border-t border-line pt-6">
           <ExamplePrompts
-            prompts={prompts}
+            groups={promptGroups}
             disabled={isLoading}
             onSelectPrompt={onSelectPrompt}
             variant="compact"
