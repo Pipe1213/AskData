@@ -10,8 +10,9 @@ from psycopg.types.json import Jsonb
 
 from app.core.config import Settings, get_settings
 from app.db.connection import get_db_connection
-from app.schemas.query import ConversationMessage, QueryErrorResponse, QueryResponse
+from app.schemas.query import ConversationMessage, MemoryContext, QueryErrorResponse, QueryResponse
 from app.schemas.session import SessionDetail, SessionSummary, SessionTurn
+from app.services.memory_service import MemoryService
 
 
 @dataclass
@@ -26,6 +27,7 @@ class SessionService:
         self.settings = settings or get_settings()
         self.schema_name = "askdata_app"
         self.preview_row_limit = 50
+        self.memory_service = MemoryService()
 
     def initialize_storage(self) -> None:
         with get_db_connection(self.settings) as connection:
@@ -57,8 +59,10 @@ class SessionService:
                         chart_type TEXT,
                         chart_x TEXT,
                         chart_y TEXT,
+                        primary_artifact TEXT NOT NULL DEFAULT 'summary',
                         warnings_json JSONB NOT NULL DEFAULT '[]'::jsonb,
                         used_tables_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+                        memory_json JSONB NOT NULL DEFAULT '{{}}'::jsonb,
                         plan_json JSONB NOT NULL DEFAULT '{{}}'::jsonb,
                         trace_json JSONB NOT NULL DEFAULT '{{}}'::jsonb,
                         error_code TEXT,
@@ -66,6 +70,18 @@ class SessionService:
                         repaired BOOLEAN NOT NULL DEFAULT FALSE,
                         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                     )
+                    """
+                )
+                cursor.execute(
+                    f"""
+                    ALTER TABLE {self.schema_name}.chat_turns
+                    ADD COLUMN IF NOT EXISTS primary_artifact TEXT NOT NULL DEFAULT 'summary'
+                    """
+                )
+                cursor.execute(
+                    f"""
+                    ALTER TABLE {self.schema_name}.chat_turns
+                    ADD COLUMN IF NOT EXISTS memory_json JSONB NOT NULL DEFAULT '{{}}'::jsonb
                     """
                 )
                 cursor.execute(
@@ -169,8 +185,10 @@ class SessionService:
                         chart_type,
                         chart_x,
                         chart_y,
+                        primary_artifact,
                         warnings_json,
                         used_tables_json,
+                        memory_json,
                         plan_json,
                         trace_json,
                         error_code,
@@ -256,13 +274,15 @@ class SessionService:
                         chart_type,
                         chart_x,
                         chart_y,
+                        primary_artifact,
                         warnings_json,
                         used_tables_json,
+                        memory_json,
                         plan_json,
                         trace_json,
                         repaired
                     ) VALUES (
-                        %s, %s, %s, 'success', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                        %s, %s, %s, 'success', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                     )
                     RETURNING created_at
                     """,
@@ -278,8 +298,17 @@ class SessionService:
                         response.chart_recommendation.type,
                         response.chart_recommendation.x,
                         response.chart_recommendation.y,
+                        response.primary_artifact,
                         Jsonb(self._to_jsonable(response.warnings)),
                         Jsonb(self._to_jsonable(response.used_tables)),
+                        Jsonb(
+                            self._to_jsonable(
+                                self.memory_service.build_turn_memory(
+                                    response,
+                                    turn_id=turn_id,
+                                ).model_dump()
+                            )
+                        ),
                         Jsonb(self._to_jsonable(response.plan.model_dump() if response.plan else {})),
                         Jsonb(self._to_jsonable(response.trace.model_dump() if response.trace else {})),
                         response.repaired,
@@ -326,12 +355,13 @@ class SessionService:
                         status,
                         warnings_json,
                         used_tables_json,
+                        memory_json,
                         plan_json,
                         trace_json,
                         error_code,
                         error_message
                     ) VALUES (
-                        %s, %s, %s, 'error', %s, '[]'::jsonb, %s, %s, %s, %s
+                        %s, %s, %s, 'error', %s, '[]'::jsonb, '{{}}'::jsonb, %s, %s, %s, %s
                     )
                     RETURNING created_at
                     """,
@@ -367,7 +397,7 @@ class SessionService:
         client_token: str,
         session_id: str,
         turn_id: str,
-    ) -> tuple[str, list[ConversationMessage]] | None:
+    ) -> tuple[str, list[ConversationMessage], MemoryContext | None] | None:
         session = self.get_session(client_token, session_id)
         if session is None:
             return None
@@ -400,7 +430,32 @@ class SessionService:
                 ]
             )
 
-        return target_turn.question, context
+        memory_context = self.memory_service.build_memory_context(
+            target_turn.question,
+            prior_successful_turns,
+        )
+
+        return target_turn.question, context, memory_context
+
+    def get_memory_context(
+        self,
+        client_token: str,
+        session_id: str | None,
+        question: str,
+    ) -> MemoryContext | None:
+        if not session_id:
+            return None
+
+        session = self.get_session(client_token, session_id)
+        if session is None:
+            return None
+
+        successful_turns = [
+            turn
+            for turn in session.turns
+            if turn.status == "success" and turn.response is not None
+        ]
+        return self.memory_service.build_memory_context(question, successful_turns)
 
     def export_turn_csv(
         self,
@@ -494,6 +549,7 @@ class SessionService:
                     "x": row["chart_x"],
                     "y": row["chart_y"],
                 },
+                primary_artifact=row.get("primary_artifact") or "summary",
                 warnings=list(row["warnings_json"] or []),
                 used_tables=list(row["used_tables_json"] or []),
                 session_id=session_id,
@@ -501,6 +557,7 @@ class SessionService:
                 persisted=True,
                 created_at=created_at,
                 repaired=bool(row["repaired"]),
+                memory=(row["memory_json"] or None),
                 plan=(row["plan_json"] or None),
                 trace=(row["trace_json"] or None),
             )

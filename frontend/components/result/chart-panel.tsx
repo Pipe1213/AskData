@@ -18,7 +18,7 @@ type ChartPanelProps = {
   columns?: string[];
   rows?: Array<Array<unknown>>;
   isLoading: boolean;
-  variant?: "panel" | "embedded";
+  variant?: "panel" | "embedded" | "inline";
 };
 
 type ChartRow = Record<string, string | number>;
@@ -39,31 +39,48 @@ export function ChartPanel({
     canRenderChart(chartRecommendation) &&
     chartData.length > 0;
   const wrapperClass =
-    variant === "embedded" ? "rounded-[24px] border border-line bg-white/85 p-4" : "panel p-5";
+    variant === "embedded"
+      ? "rounded-[24px] border border-line bg-white/85 p-4"
+      : variant === "inline"
+        ? ""
+        : "panel p-5";
+  const showMeta = variant !== "inline";
+  const showDescription = variant !== "inline";
+  const showHeading = variant !== "inline";
+  const chartFrameClass =
+    variant === "inline"
+      ? "mt-3 rounded-[20px] border border-line bg-[#fffdf9] p-4"
+      : "mt-4 rounded-[24px] border border-dashed border-line bg-white/70 p-5";
 
   return (
     <section className={wrapperClass}>
       <div className={`${variant === "panel" ? "mt-4" : ""} flex flex-col gap-3 md:flex-row md:items-end md:justify-between`}>
         <div>
           {variant === "panel" ? <div className="eyebrow">Chart</div> : null}
-          <h3 className={`${variant === "panel" ? "section-title mt-4" : "text-base font-semibold text-ink"}`}>Visualization</h3>
-          <p className="mt-2 text-sm leading-6 text-muted">
-            This chart follows the backend recommendation instead of guessing independently.
-          </p>
+          {showHeading ? (
+            <h3 className={`${variant === "panel" ? "section-title mt-4" : "text-base font-semibold text-ink"}`}>Visualization</h3>
+          ) : null}
+          {showDescription ? (
+            <p className="mt-2 text-sm leading-6 text-muted">
+              This chart follows the backend recommendation instead of guessing independently.
+            </p>
+          ) : null}
         </div>
-        <div className="flex flex-wrap gap-2">
-          <span className="chip">
-            type: {chartRecommendation?.type ?? "table_only"}
-          </span>
-          <span className="chip">
-            x: {chartRecommendation?.x ?? "n/a"}
-          </span>
-          <span className="chip">
-            y: {chartRecommendation?.y ?? "n/a"}
-          </span>
-        </div>
+        {showMeta ? (
+          <div className="flex flex-wrap gap-2">
+            <span className="chip">
+              type: {chartRecommendation?.type ?? "table_only"}
+            </span>
+            <span className="chip">
+              x: {chartRecommendation?.x ?? "n/a"}
+            </span>
+            <span className="chip">
+              y: {chartRecommendation?.y ?? "n/a"}
+            </span>
+          </div>
+        ) : null}
       </div>
-      <div className="mt-4 rounded-[24px] border border-dashed border-line bg-white/70 p-5">
+      <div className={chartFrameClass}>
         {isLoading ? (
           <div className="flex h-[220px] items-center justify-center text-sm text-muted">
             Waiting for chart-ready data...
@@ -102,11 +119,13 @@ export function ChartPanel({
           </div>
         )}
       </div>
-      <p className="mt-3 text-sm leading-6 text-muted">
-        {canRender
-          ? "The chart is using the backend recommendation plus the live result rows returned by /query."
-          : "Charts only appear when the backend returns a useful chart recommendation with plottable rows."}
-      </p>
+      {showDescription ? (
+        <p className="mt-3 text-sm leading-6 text-muted">
+          {canRender
+            ? "The chart is using the backend recommendation plus the live result rows returned by /query."
+            : "Charts only appear when the backend returns a useful chart recommendation with plottable rows."}
+        </p>
+      ) : null}
     </section>
   );
 }

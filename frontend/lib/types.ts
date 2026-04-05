@@ -28,6 +28,7 @@ export type QueryPlan = {
   ambiguity_notes: string[];
   confidence: "low" | "medium" | "high";
   memory_summary?: string | null;
+  inherited_from_turn_ids: string[];
 };
 
 export type QueryTraceStep = {
@@ -43,6 +44,24 @@ export type QueryTrace = {
   schema_focus: string[];
   retries: string[];
   stages: QueryTraceStep[];
+  memory_summary?: string | null;
+};
+
+export type TurnMemory = {
+  source_turn_id?: string | null;
+  question: string;
+  task_type: string;
+  interpreted_goal: string;
+  metric_targets: string[];
+  dimension_targets: string[];
+  time_targets: string[];
+  candidate_table_families: string[];
+  used_tables: string[];
+  generated_sql: string;
+  answer_summary: string;
+  row_count: number;
+  result_focus?: string | null;
+  memory_tags: string[];
 };
 
 export type QueryRequest = {
@@ -66,6 +85,8 @@ export type QueryResponse = {
   persisted: boolean;
   created_at?: string | null;
   repaired: boolean;
+  primary_artifact: "summary" | "table" | "chart" | "chart_and_table";
+  memory?: TurnMemory | null;
   plan?: QueryPlan | null;
   trace?: QueryTrace | null;
   debug?: {
@@ -78,6 +99,7 @@ export type QueryResponse = {
     planner_confidence?: string | null;
     planner_table_families: string[];
     retry_reasons: string[];
+    inherited_turn_ids: string[];
   } | null;
 };
 
@@ -104,6 +126,7 @@ export type QueryErrorResponse = {
     planner_confidence?: string | null;
     planner_table_families: string[];
     retry_reasons: string[];
+    inherited_turn_ids: string[];
   } | null;
 };
 

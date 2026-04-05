@@ -1,8 +1,7 @@
 import json
 
-from app.schemas.query import ConversationMessage, QueryPlan
+from app.schemas.query import ConversationMessage, MemoryContext, QueryPlan
 from app.schemas.retrieval import RetrievedSchemaContext
-from app.utils.text import significant_tokens
 
 
 def build_sql_generation_messages(
@@ -11,8 +10,10 @@ def build_sql_generation_messages(
     max_result_rows: int,
     conversation_context: list[ConversationMessage] | None = None,
     plan: QueryPlan | None = None,
+    memory_context: MemoryContext | None = None,
+    dataset_hints: list[str] | None = None,
 ) -> list[dict[str, str]]:
-    domain_hints = _build_pagila_domain_hints(question)
+    dataset_hint_section = _format_dataset_hints(dataset_hints)
     system_prompt = f"""
 You are an expert PostgreSQL analytics assistant.
 Generate a single read-only PostgreSQL query that answers the user's question.
@@ -28,9 +29,7 @@ Rules:
 - Use PostgreSQL syntax only.
 - Do not invent columns or tables.
 - Return structured JSON matching the required schema.
-
-Pagila-specific business hints:
-{domain_hints}
+{dataset_hint_section}
 """.strip()
 
     user_prompt = f"""
@@ -48,6 +47,9 @@ Intent hints:
 
 Planner output:
 {_format_query_plan(plan)}
+
+Structured memory context:
+{_format_memory_context(memory_context)}
 
 Return:
 - `sql`: the generated PostgreSQL query
@@ -144,6 +146,27 @@ def _format_query_plan(plan: QueryPlan | None) -> str:
     return "\n".join(sections)
 
 
+def _format_memory_context(memory_context: MemoryContext | None) -> str:
+    if memory_context is None:
+        return "None"
+
+    sections: list[str] = []
+    if memory_context.memory_summary:
+        sections.append("Memory summary: " + memory_context.memory_summary)
+    if memory_context.suggested_metric_targets:
+        sections.append("Inherited metric targets: " + ", ".join(memory_context.suggested_metric_targets))
+    if memory_context.suggested_dimension_targets:
+        sections.append("Inherited dimension targets: " + ", ".join(memory_context.suggested_dimension_targets))
+    if memory_context.suggested_time_targets:
+        sections.append("Inherited time targets: " + ", ".join(memory_context.suggested_time_targets))
+    if memory_context.suggested_table_families:
+        sections.append("Inherited table families: " + ", ".join(memory_context.suggested_table_families))
+    if memory_context.inherited_from_turn_ids:
+        sections.append("Inherited from turn ids: " + ", ".join(memory_context.inherited_from_turn_ids))
+
+    return "\n".join(sections) if sections else "None"
+
+
 def build_answer_summary_messages(
     question: str,
     generated_sql: str,
@@ -153,7 +176,12 @@ def build_answer_summary_messages(
     sample_rows = rows[:5]
     system_prompt = """
 You summarize SQL query results for a business user.
-Write a short, factual answer grounded only in the user question, the SQL, the result columns, and the returned rows.
+Write a short, factual answer that answers the user's question directly.
+Lead with the business answer, not the query mechanics.
+Prefer clean business phrasing and readable date/number labels.
+For rankings, name the top result directly.
+For trends, mention the most visible pattern or peak shown in the returned rows.
+Avoid phrases like "The query returned..." or "The leading result was..." unless there is no better direct answer.
 Do not invent trends, causes, or values that are not present in the results.
 Keep the answer concise.
 """.strip()
@@ -186,8 +214,10 @@ def build_sql_repair_messages(
     max_result_rows: int,
     conversation_context: list[ConversationMessage] | None = None,
     plan: QueryPlan | None = None,
+    memory_context: MemoryContext | None = None,
+    dataset_hints: list[str] | None = None,
 ) -> list[dict[str, str]]:
-    domain_hints = _build_pagila_domain_hints(question)
+    dataset_hint_section = _format_dataset_hints(dataset_hints)
     system_prompt = f"""
 You are repairing a PostgreSQL analytics query.
 Produce one corrected read-only PostgreSQL query that answers the original question.
@@ -202,9 +232,7 @@ Rules:
 - Aggregate queries without LIMIT are acceptable when the output is naturally small.
 - Use PostgreSQL syntax only.
 - Return structured JSON matching the required schema.
-
-Pagila-specific business hints:
-{domain_hints}
+{dataset_hint_section}
 """.strip()
 
     user_prompt = f"""
@@ -222,6 +250,9 @@ Intent hints:
 
 Planner output:
 {_format_query_plan(plan)}
+
+Structured memory context:
+{_format_memory_context(memory_context)}
 
 Previous SQL:
 {previous_sql}
@@ -241,36 +272,16 @@ Return:
     ]
 
 
-def _build_pagila_domain_hints(question: str) -> str:
-    question_tokens = significant_tokens(question)
-    hints: list[str] = [
-        "- Use only the retrieved schema context. If the question cannot be answered safely from it, be conservative.",
-    ]
-
-    if question_tokens & {"revenue", "sale", "sales", "spend", "spent", "earning", "earnings"}:
-        hints.append("- In Pagila, revenue or customer spend is usually measured with payment.amount.")
-
-    if question_tokens & {"category", "genre"} and question_tokens & {"revenue", "sale", "sales", "spend", "spent"}:
-        hints.append(
-            "- Category revenue typically requires joins through payment -> rental -> inventory -> film_category -> category."
-        )
-
-    if question_tokens & {"staff", "employee", "employees"} and question_tokens & {"revenue", "sale", "sales", "spend", "spent"}:
-        hints.append("- Staff processed revenue usually uses payment.staff_id together with payment.amount.")
-
-    if question_tokens & {"rental", "rentals", "rented", "trend", "monthly", "date", "month", "year"}:
-        hints.append("- Rental trends usually rely on rental.rental_date; payment trends usually rely on payment.payment_date.")
-
-    return "\n".join(hints)
-
-
 def build_sql_semantic_review_messages(
     question: str,
     schema_context: RetrievedSchemaContext,
     generated_sql: str,
     conversation_context: list[ConversationMessage] | None = None,
     plan: QueryPlan | None = None,
+    memory_context: MemoryContext | None = None,
+    dataset_hints: list[str] | None = None,
 ) -> list[dict[str, str]]:
+    dataset_hint_section = _format_dataset_hints(dataset_hints)
     system_prompt = """
 You review a generated PostgreSQL analytics query before execution.
 Decide whether the SQL appears to answer the user's business question correctly enough to continue.
@@ -282,6 +293,8 @@ Rules:
 - Do not suggest destructive SQL.
 - Return structured JSON matching the required schema.
 """.strip()
+    if dataset_hint_section:
+        system_prompt += "\n\n" + dataset_hint_section
 
     user_prompt = f"""
 User question:
@@ -299,6 +312,9 @@ Intent hints:
 Planner output:
 {_format_query_plan(plan)}
 
+Structured memory context:
+{_format_memory_context(memory_context)}
+
 Candidate SQL:
 {generated_sql}
 
@@ -312,3 +328,9 @@ Return:
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt},
     ]
+
+
+def _format_dataset_hints(dataset_hints: list[str] | None) -> str:
+    base_hint = "- Use only the retrieved schema context. If the question cannot be answered safely from it, be conservative."
+    hints = [base_hint, *(dataset_hints or [])]
+    return "Dataset-specific hints:\n" + "\n".join(hints)

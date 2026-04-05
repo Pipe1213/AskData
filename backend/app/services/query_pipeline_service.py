@@ -5,11 +5,13 @@ from app.llm.base import LLMClientError
 from app.schemas.query import (
     ConversationMessage,
     DebugPayload,
+    MemoryContext,
     QueryPlan,
     QueryResponse,
     QueryTrace,
     QueryTraceStep,
 )
+from app.services.dataset_adapters import DatasetAdapter, resolve_dataset_adapter
 from app.services.planner_service import PlannerService
 from app.services.response_formatter_service import ResponseFormatterService
 from app.services.retrieval_service import RetrievalService
@@ -52,6 +54,7 @@ class QueryPipelineService:
         question: str,
         schema: DatabaseSchema | None,
         conversation_context: list[ConversationMessage] | None = None,
+        memory_context: MemoryContext | None = None,
     ) -> QueryResponse:
         normalized_question = question.strip()
         if not normalized_question:
@@ -73,9 +76,11 @@ class QueryPipelineService:
         normalized_conversation_context = self._normalize_conversation_context(
             conversation_context
         )
+        dataset_adapter = resolve_dataset_adapter(schema)
         plan = self.planner_service.build_plan(
             normalized_question,
             conversation_context=normalized_conversation_context,
+            memory_context=memory_context,
         )
         trace = self._new_trace(plan)
         retry_reasons: list[str] = []
@@ -86,6 +91,8 @@ class QueryPipelineService:
                 question=normalized_question,
                 schema=schema,
                 conversation_context=normalized_conversation_context,
+                memory_context=memory_context,
+                dataset_adapter=dataset_adapter,
                 plan=plan,
                 broaden=False,
                 trace=trace,
@@ -109,6 +116,8 @@ class QueryPipelineService:
                 question=normalized_question,
                 schema=schema,
                 conversation_context=normalized_conversation_context,
+                memory_context=memory_context,
+                dataset_adapter=dataset_adapter,
                 plan=plan,
                 broaden=True,
                 trace=trace,
@@ -134,6 +143,8 @@ class QueryPipelineService:
                     question=normalized_question,
                     schema=schema,
                     conversation_context=normalized_conversation_context,
+                    memory_context=memory_context,
+                    dataset_adapter=dataset_adapter,
                     plan=plan,
                     broaden=True,
                     trace=trace,
@@ -165,6 +176,7 @@ class QueryPipelineService:
                         planner_confidence=plan.confidence,
                         planner_table_families=plan.candidate_table_families,
                         retry_reasons=retry_reasons,
+                        inherited_turn_ids=plan.inherited_from_turn_ids,
                     )
                 }
             )
@@ -176,15 +188,20 @@ class QueryPipelineService:
         question: str,
         schema: DatabaseSchema,
         conversation_context: list[ConversationMessage],
+        memory_context: MemoryContext | None,
+        dataset_adapter: DatasetAdapter,
         plan: QueryPlan,
         broaden: bool,
         trace: QueryTrace,
     ) -> dict:
         retrieval_question = self._build_retrieval_question(question, conversation_context)
+        dataset_hints = dataset_adapter.prompt_hints(significant_tokens(question))
         retrieval_context = self.retrieval_service.retrieve_schema_context(
             retrieval_question,
             schema,
             plan=plan,
+            memory_context=memory_context,
+            dataset_adapter=dataset_adapter,
             max_tables=8 if broaden else 5,
             max_columns_per_table=10 if broaden else 8,
             broaden=broaden,
@@ -220,6 +237,8 @@ class QueryPipelineService:
                 schema_context=retrieval_context,
                 conversation_context=conversation_context,
                 plan=plan,
+                memory_context=memory_context,
+                dataset_hints=dataset_hints,
             )
         except LLMClientError as exc:
             raise QueryPipelineError(
@@ -234,6 +253,8 @@ class QueryPipelineService:
             retrieval_context=retrieval_context,
             generation_result=generation_result,
             conversation_context=conversation_context,
+            memory_context=memory_context,
+            dataset_hints=dataset_hints,
             plan=plan,
             trace=trace,
         )
@@ -244,6 +265,8 @@ class QueryPipelineService:
             generation_result=generation_result,
             allow_repair=True,
             conversation_context=conversation_context,
+            memory_context=memory_context,
+            dataset_hints=dataset_hints,
             plan=plan,
             trace=trace,
         )
@@ -310,6 +333,8 @@ class QueryPipelineService:
         retrieval_context,
         generation_result,
         conversation_context: list[ConversationMessage],
+        memory_context: MemoryContext | None,
+        dataset_hints: list[str],
         plan: QueryPlan,
         trace: QueryTrace,
     ):
@@ -323,6 +348,8 @@ class QueryPipelineService:
                 generated_sql=generation_result.sql,
                 conversation_context=conversation_context,
                 plan=plan,
+                memory_context=memory_context,
+                dataset_hints=dataset_hints,
             )
         except LLMClientError:
             return generation_result, []
@@ -344,6 +371,8 @@ class QueryPipelineService:
                 ),
                 conversation_context=conversation_context,
                 plan=plan,
+                memory_context=memory_context,
+                dataset_hints=dataset_hints,
             )
         except LLMClientError:
             return generation_result, []
@@ -364,6 +393,8 @@ class QueryPipelineService:
         generation_result,
         allow_repair: bool,
         conversation_context: list[ConversationMessage],
+        memory_context: MemoryContext | None,
+        dataset_hints: list[str],
         plan: QueryPlan,
         trace: QueryTrace,
     ) -> dict:
@@ -386,6 +417,8 @@ class QueryPipelineService:
                     failure_message="; ".join(validation_result.errors),
                     repair_stage="validation",
                     conversation_context=conversation_context,
+                    memory_context=memory_context,
+                    dataset_hints=dataset_hints,
                     plan=plan,
                     trace=trace,
                 )
@@ -395,6 +428,8 @@ class QueryPipelineService:
                     generation_result=repaired_result,
                     allow_repair=False,
                     conversation_context=conversation_context,
+                    memory_context=memory_context,
+                    dataset_hints=dataset_hints,
                     plan=plan,
                     trace=trace,
                 )
@@ -428,6 +463,8 @@ class QueryPipelineService:
                     ),
                     repair_stage="execution",
                     conversation_context=conversation_context,
+                    memory_context=memory_context,
+                    dataset_hints=dataset_hints,
                     plan=plan,
                     trace=trace,
                 )
@@ -437,6 +474,8 @@ class QueryPipelineService:
                     generation_result=repaired_result,
                     allow_repair=False,
                     conversation_context=conversation_context,
+                    memory_context=memory_context,
+                    dataset_hints=dataset_hints,
                     plan=plan,
                     trace=trace,
                 )
@@ -477,6 +516,8 @@ class QueryPipelineService:
         failure_message: str,
         repair_stage: str,
         conversation_context: list[ConversationMessage],
+        memory_context: MemoryContext | None,
+        dataset_hints: list[str],
         plan: QueryPlan,
         trace: QueryTrace,
     ):
@@ -488,6 +529,8 @@ class QueryPipelineService:
                 failure_message=failure_message,
                 conversation_context=conversation_context,
                 plan=plan,
+                memory_context=memory_context,
+                dataset_hints=dataset_hints,
             )
             trace.stages.append(
                 QueryTraceStep(
@@ -631,6 +674,7 @@ class QueryPipelineService:
             schema_focus=list(plan.candidate_table_families),
             retries=[],
             stages=stages,
+            memory_summary=plan.memory_summary,
         )
 
     def _should_retry_after_error(self, exc: QueryPipelineError, plan: QueryPlan) -> bool:

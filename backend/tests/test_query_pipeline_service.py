@@ -37,6 +37,8 @@ class FakeRetrievalService:
         question: str,
         schema: DatabaseSchema,
         plan: QueryPlan | None = None,
+        memory_context=None,
+        dataset_adapter=None,
         max_tables: int = 5,
         max_columns_per_table: int = 8,
         broaden: bool = False,
@@ -66,6 +68,8 @@ class FakeSQLGenerationService:
         schema_context: RetrievedSchemaContext,
         conversation_context=None,
         plan: QueryPlan | None = None,
+        memory_context=None,
+        dataset_hints=None,
     ) -> SQLGenerationResult:
         self.generate_calls += 1
         self.last_conversation_context = conversation_context
@@ -79,6 +83,8 @@ class FakeSQLGenerationService:
         failure_message: str,
         conversation_context=None,
         plan: QueryPlan | None = None,
+        memory_context=None,
+        dataset_hints=None,
     ) -> SQLGenerationResult:
         self.repair_calls += 1
         self.last_conversation_context = conversation_context
@@ -91,6 +97,8 @@ class FakeSQLGenerationService:
         generated_sql: str,
         conversation_context=None,
         plan: QueryPlan | None = None,
+        memory_context=None,
+        dataset_hints=None,
     ) -> SQLSemanticReviewResult:
         self.review_calls += 1
         self.last_conversation_context = conversation_context
@@ -224,6 +232,8 @@ def test_query_pipeline_canonicalizes_used_tables(sample_schema) -> None:
             schema_context: RetrievedSchemaContext,
             conversation_context=None,
             plan: QueryPlan | None = None,
+            memory_context=None,
+            dataset_hints=None,
         ) -> SQLGenerationResult:
             return SQLGenerationResult(
                 sql="SELECT customer_id, amount FROM payment",
@@ -313,6 +323,8 @@ def test_query_pipeline_rewrites_once_after_semantic_review(sample_schema) -> No
             generated_sql: str,
             conversation_context=None,
             plan: QueryPlan | None = None,
+            memory_context=None,
+            dataset_hints=None,
         ) -> SQLSemanticReviewResult:
             self.review_calls += 1
             return SQLSemanticReviewResult(
@@ -361,6 +373,8 @@ def test_query_pipeline_retries_once_with_broader_retrieval_after_no_rows(sample
             question: str,
             schema: DatabaseSchema,
             plan: QueryPlan | None = None,
+            memory_context=None,
+            dataset_adapter=None,
             max_tables: int = 5,
             max_columns_per_table: int = 8,
             broaden: bool = False,
@@ -375,6 +389,8 @@ def test_query_pipeline_retries_once_with_broader_retrieval_after_no_rows(sample
             schema_context: RetrievedSchemaContext,
             conversation_context=None,
             plan: QueryPlan | None = None,
+            memory_context=None,
+            dataset_hints=None,
         ) -> SQLGenerationResult:
             self.generate_calls += 1
             return SQLGenerationResult(

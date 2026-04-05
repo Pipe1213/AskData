@@ -20,12 +20,22 @@ def run_query(
     session_service = _get_session_service(request)
     schema_cache = getattr(request.app.state, "schema_cache", None)
     debug_mode = bool(getattr(getattr(pipeline_service, "settings", None), "debug_mode", False))
+    memory_context = (
+        session_service.get_memory_context(
+            client_token=client_token,
+            session_id=payload.session_id,
+            question=payload.question.strip(),
+        )
+        if client_token is not None and payload.question.strip()
+        else None
+    )
 
     try:
         response = pipeline_service.run_query(
             question=payload.question,
             schema=schema_cache,
             conversation_context=payload.conversation_context,
+            memory_context=memory_context,
         )
         if client_token is None:
             return response
@@ -62,6 +72,11 @@ def run_query(
                 DebugPayload(
                     stage=exc.stage,
                     repair_attempted="repair" in " ".join(warnings).lower(),
+                    inherited_turn_ids=(
+                        memory_context.inherited_from_turn_ids
+                        if memory_context is not None
+                        else []
+                    ),
                 )
                 if debug_mode
                 else None

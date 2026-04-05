@@ -134,10 +134,7 @@ function ErrorReply({
 }) {
   return (
     <AssistantFrame tone="warning">
-      <p className="text-sm font-semibold uppercase tracking-[0.16em] text-accent">
-        Assistant
-      </p>
-      <h3 className="mt-4 text-xl font-semibold text-ink">
+      <h3 className="text-xl font-semibold text-ink">
         I could not answer that cleanly
       </h3>
       <p className="mt-3 text-sm leading-7 text-muted md:text-base">
@@ -170,104 +167,59 @@ function SuccessReply({
     canRenderChart(queryResult.chart_recommendation) && queryResult.rows.length > 0;
   const isNoResult = queryResult.row_count === 0;
   const trace = queryResult.trace;
+  const primaryArtifact = queryResult.primary_artifact;
+  const showPrimaryTable =
+    !isNoResult && (primaryArtifact === "table" || primaryArtifact === "chart_and_table");
+  const showPrimaryChart =
+    !isNoResult &&
+    shouldShowChart &&
+    (primaryArtifact === "chart" || primaryArtifact === "chart_and_table");
+  const showTableDetails =
+    !isNoResult &&
+    !showPrimaryTable &&
+    queryResult.rows.length > 0;
+  const showChartDetails =
+    !isNoResult &&
+    !showPrimaryChart &&
+    shouldShowChart;
+  const footerMeta = [
+    queryResult.row_count === 0 ? "no matching rows" : `${queryResult.row_count} rows`,
+    queryResult.repaired ? "repaired once" : null,
+    queryResult.created_at ? formatTurnTime(queryResult.created_at) : null,
+  ].filter(Boolean);
 
   return (
     <AssistantFrame>
-      <p className="text-sm font-semibold uppercase tracking-[0.16em] text-accent">
-        Assistant
-      </p>
-      <div className="mt-4 space-y-4">
+      <div className="space-y-6">
         <div className="space-y-3">
-          <h3 className="font-serif text-[1.85rem] leading-tight tracking-[-0.03em] text-ink md:text-[2.2rem]">
+          <h3 className="max-w-[26ch] font-serif text-[2rem] leading-tight tracking-[-0.035em] text-ink md:text-[2.45rem]">
             {queryResult.answer_summary}
           </h3>
-          <div className="flex flex-wrap gap-2">
-            <span className="chip">{queryResult.row_count} rows</span>
-            <span className="chip">{queryResult.columns.length} columns</span>
-            <span className="chip">{queryResult.chart_recommendation.type}</span>
-            {queryResult.repaired ? <span className="chip">repaired once</span> : null}
-            {queryResult.created_at ? <span className="chip">{formatTurnTime(queryResult.created_at)}</span> : null}
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={() => onRerunTurn(turn.id, turn.question)}
-              className="chip cursor-pointer transition hover:border-accent hover:text-accent"
-            >
-              Rerun
-            </button>
-            <button
-              type="button"
-              onClick={() => onExportTurn(turn.id)}
-              className="chip cursor-pointer transition hover:border-accent hover:text-accent"
-            >
-              Export CSV
-            </button>
-          </div>
         </div>
 
-        {trace ? (
-          <details className="details-card" open={trace.retries.length > 0}>
-            <summary>
-              <span>How AskData approached this</span>
-              <span className="chip">{trace.confidence} confidence</span>
-            </summary>
-            <div className="details-body space-y-4">
-              <p className="text-sm leading-7 text-muted md:text-base">
-                {trace.interpreted_goal}
-              </p>
-              {trace.schema_focus.length > 0 ? (
-                <div className="space-y-2">
-                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted">
-                    Schema focus
-                  </p>
-                  <div className="flex flex-wrap gap-2">
-                    {trace.schema_focus.map((focus) => (
-                      <span key={focus} className="chip">
-                        {focus}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              ) : null}
-              {trace.retries.length > 0 ? (
-                <div className="space-y-2">
-                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted">
-                    Retries
-                  </p>
-                  <div className="space-y-2">
-                    {trace.retries.map((retry, index) => (
-                      <p key={`${retry}-${index}`} className="text-sm leading-7 text-muted">
-                        {retry}
-                      </p>
-                    ))}
-                  </div>
-                </div>
-              ) : null}
-              <div className="space-y-2">
-                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted">
-                  Trace
-                </p>
-                <div className="space-y-3">
-                  {trace.stages.map((step, index) => (
-                    <div key={`${step.stage}-${index}`} className="space-y-1">
-                      <p className="text-sm font-semibold text-ink">{step.label}</p>
-                      {step.detail ? (
-                        <p className="text-sm leading-7 text-muted">{step.detail}</p>
-                      ) : null}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          </details>
+        {showPrimaryChart ? (
+          <ChartPanel
+            chartRecommendation={queryResult.chart_recommendation}
+            columns={queryResult.columns}
+            rows={queryResult.rows}
+            isLoading={false}
+            variant="inline"
+          />
+        ) : null}
+
+        {showPrimaryTable ? (
+          <ResultsTable
+            columns={queryResult.columns}
+            rows={queryResult.rows}
+            totalRowCount={queryResult.row_count}
+            isLoading={false}
+            variant="inline"
+          />
         ) : null}
 
         {isNoResult ? (
-          <div className="rounded-[24px] border border-line bg-white/72 px-5 py-5">
-            <p className="text-sm font-semibold uppercase tracking-[0.16em] text-muted">
-              No matching data
-            </p>
+          <div className="rounded-[20px] border border-line bg-[#fffdf9] px-5 py-5">
+            <p className="text-sm font-semibold text-ink">No matching data</p>
             <p className="mt-3 text-sm leading-7 text-muted md:text-base">
               The query completed successfully, but it did not find rows matching the current
               filters.
@@ -275,43 +227,74 @@ function SuccessReply({
           </div>
         ) : null}
 
-        {shouldShowChart ? (
-          <ChartPanel
-            chartRecommendation={queryResult.chart_recommendation}
-            columns={queryResult.columns}
-            rows={queryResult.rows}
-            isLoading={false}
-            variant="embedded"
-          />
-        ) : null}
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-sm">
+          <button
+            type="button"
+            onClick={() => onRerunTurn(turn.id, turn.question)}
+            className="font-medium text-accent transition hover:opacity-75"
+          >
+            Rerun
+          </button>
+          <button
+            type="button"
+            onClick={() => onExportTurn(turn.id)}
+            className="font-medium text-accent transition hover:opacity-75"
+          >
+            Export CSV
+          </button>
+        </div>
 
         <div className="space-y-3">
-          <details className="details-card">
-            <summary>
-              <span>Preview result rows</span>
-              <span className="chip">table</span>
-            </summary>
-            <div className="details-body">
-              <ResultsTable
-                columns={queryResult.columns}
-                rows={queryResult.rows}
-                totalRowCount={queryResult.row_count}
-                isLoading={false}
-                variant="embedded"
-              />
-            </div>
-          </details>
+          {showChartDetails ? (
+            <details className="details-card">
+              <summary>
+                <span>Show chart</span>
+                <span className="text-xs font-medium text-muted">
+                  {queryResult.chart_recommendation.type}
+                </span>
+              </summary>
+              <div className="details-body">
+                <ChartPanel
+                  chartRecommendation={queryResult.chart_recommendation}
+                  columns={queryResult.columns}
+                  rows={queryResult.rows}
+                  isLoading={false}
+                  variant="embedded"
+                />
+              </div>
+            </details>
+          ) : null}
+
+          {showTableDetails ? (
+            <details className="details-card">
+              <summary>
+                <span>Show result rows</span>
+                <span className="text-xs font-medium text-muted">
+                  {queryResult.row_count} rows
+                </span>
+              </summary>
+              <div className="details-body">
+                <ResultsTable
+                  columns={queryResult.columns}
+                  rows={queryResult.rows}
+                  totalRowCount={queryResult.row_count}
+                  isLoading={false}
+                  variant="embedded"
+                />
+              </div>
+            </details>
+          ) : null}
 
           <details className="details-card">
             <summary>
-              <span>Inspect generated SQL</span>
-              <span className="chip">optional</span>
+              <span>Show SQL</span>
+              <span className="text-xs font-medium text-muted">optional</span>
             </summary>
             <div className="details-body">
               <SqlPanel
                 sql={queryResult.generated_sql}
                 isLoading={false}
-                variant="embedded"
+                variant="inline"
               />
             </div>
           </details>
@@ -319,20 +302,91 @@ function SuccessReply({
           {queryResult.used_tables.length > 0 ? (
             <details className="details-card">
               <summary>
-                <span>See used tables</span>
-                <span className="chip">{queryResult.used_tables.length}</span>
+                <span>Show tables used</span>
+                <span className="text-xs font-medium text-muted">{queryResult.used_tables.length}</span>
               </summary>
               <div className="details-body">
                 <UsedTablesPanel
                   title="Tables used for this answer"
                   description="These tables were reported by the backend after validation and execution."
                   tables={queryResult.used_tables}
-                  variant="compact"
+                  variant="inline"
                 />
               </div>
             </details>
           ) : null}
+
+          {trace ? (
+            <details className="details-card" open={trace.retries.length > 0}>
+              <summary>
+                <span>How this answer was produced</span>
+                <span className="text-xs font-medium text-muted">optional</span>
+              </summary>
+              <div className="details-body space-y-4">
+                <p className="text-sm leading-7 text-muted md:text-base">{trace.interpreted_goal}</p>
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted">
+                  {trace.confidence} confidence
+                </p>
+                {trace.memory_summary ? (
+                  <p className="text-sm leading-7 text-muted">
+                    {trace.memory_summary}
+                  </p>
+                ) : null}
+                {trace.schema_focus.length > 0 ? (
+                  <div className="space-y-2">
+                    <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted">
+                      Schema focus
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      {trace.schema_focus.map((focus) => (
+                        <span key={focus} className="chip">
+                          {focus}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+                {trace.retries.length > 0 ? (
+                  <div className="space-y-2">
+                    <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted">
+                      Retries
+                    </p>
+                    <div className="space-y-2">
+                      {trace.retries.map((retry, index) => (
+                        <p key={`${retry}-${index}`} className="text-sm leading-7 text-muted">
+                          {retry}
+                        </p>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+                <div className="space-y-2">
+                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted">
+                    Trace
+                  </p>
+                  <div className="space-y-3">
+                    {trace.stages.map((step, index) => (
+                      <div key={`${step.stage}-${index}`} className="space-y-1">
+                        <p className="text-sm font-semibold text-ink">{step.label}</p>
+                        {step.detail ? (
+                          <p className="text-sm leading-7 text-muted">{step.detail}</p>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </details>
+          ) : null}
         </div>
+
+        {footerMeta.length > 0 ? (
+          <div className="flex flex-wrap gap-x-4 gap-y-2 text-xs text-muted">
+            {footerMeta.map((item) => (
+              <span key={item}>{item}</span>
+            ))}
+          </div>
+        ) : null}
       </div>
     </AssistantFrame>
   );

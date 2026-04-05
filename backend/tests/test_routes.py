@@ -36,7 +36,7 @@ def test_schema_overview_route_uses_cached_schema(client: TestClient, sample_sch
 
 def test_query_route_returns_pipeline_success(client: TestClient) -> None:
     class DummyPipelineService:
-        def run_query(self, question: str, schema, conversation_context=None):
+        def run_query(self, question: str, schema, conversation_context=None, memory_context=None):
             return QueryResponse(
                 question=question,
                 answer_summary="Summary",
@@ -52,6 +52,11 @@ def test_query_route_returns_pipeline_success(client: TestClient) -> None:
             )
 
     client.app.state.query_pipeline_service = DummyPipelineService()
+    client.app.state.session_service = type(
+        "DummySessionService",
+        (),
+        {"get_memory_context": staticmethod(lambda client_token, session_id, question: None)},
+    )()
     client.app.state.schema_cache = object()
 
     response = client.post("/query", json={"question": "Test query"})
@@ -62,7 +67,7 @@ def test_query_route_returns_pipeline_success(client: TestClient) -> None:
 
 def test_query_route_returns_structured_pipeline_error(client: TestClient) -> None:
     class DummyPipelineService:
-        def run_query(self, question: str, schema, conversation_context=None):
+        def run_query(self, question: str, schema, conversation_context=None, memory_context=None):
             raise QueryPipelineError(
                 code="sql_validation_failed",
                 message="Generated SQL failed validation.",
@@ -72,6 +77,11 @@ def test_query_route_returns_structured_pipeline_error(client: TestClient) -> No
             )
 
     client.app.state.query_pipeline_service = DummyPipelineService()
+    client.app.state.session_service = type(
+        "DummySessionService",
+        (),
+        {"get_memory_context": staticmethod(lambda client_token, session_id, question: None)},
+    )()
     client.app.state.schema_cache = object()
 
     response = client.post("/query", json={"question": "Test query"})
@@ -86,9 +96,10 @@ def test_query_route_passes_conversation_context(client: TestClient) -> None:
     captured: dict[str, object] = {}
 
     class DummyPipelineService:
-        def run_query(self, question: str, schema, conversation_context=None):
+        def run_query(self, question: str, schema, conversation_context=None, memory_context=None):
             captured["question"] = question
             captured["conversation_context"] = conversation_context
+            captured["memory_context"] = memory_context
             return QueryResponse(
                 question=question,
                 answer_summary="Summary",
@@ -103,7 +114,12 @@ def test_query_route_passes_conversation_context(client: TestClient) -> None:
                 repaired=False,
             )
 
+    class DummySessionService:
+        def get_memory_context(self, client_token: str, session_id: str | None, question: str):
+            return None
+
     client.app.state.query_pipeline_service = DummyPipelineService()
+    client.app.state.session_service = DummySessionService()
     client.app.state.schema_cache = object()
 
     response = client.post(
@@ -199,7 +215,7 @@ def test_rerun_turn_route_returns_persisted_success(client: TestClient) -> None:
             assert client_token == "client-token"
             assert session_id == "session-1"
             assert turn_id == "turn-1"
-            return "Which customers spent the most in total?", []
+            return "Which customers spent the most in total?", [], None
 
         def persist_success(self, client_token: str, response: QueryResponse, session_id: str | None = None):
             assert client_token == "client-token"
@@ -215,7 +231,7 @@ def test_rerun_turn_route_returns_persisted_success(client: TestClient) -> None:
             )()
 
     class DummyPipelineService:
-        def run_query(self, question: str, schema, conversation_context=None):
+        def run_query(self, question: str, schema, conversation_context=None, memory_context=None):
             return QueryResponse(
                 question=question,
                 answer_summary="Summary",

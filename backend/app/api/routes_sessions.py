@@ -92,13 +92,14 @@ def rerun_turn(
             detail="Session turn was not found for the current client token.",
         )
 
-    question, conversation_context = rerun_input
+    question, conversation_context, memory_context = rerun_input
 
     try:
         response = pipeline_service.run_query(
             question=question,
             schema=schema_cache,
             conversation_context=conversation_context,
+            memory_context=memory_context,
         )
         persisted_ref = session_service.persist_success(
             client_token=client_token,
@@ -125,6 +126,11 @@ def rerun_turn(
                 DebugPayload(
                     stage=exc.stage,
                     repair_attempted=False,
+                    inherited_turn_ids=(
+                        memory_context.inherited_from_turn_ids
+                        if memory_context is not None
+                        else []
+                    ),
                 )
                 if debug_mode
                 else None

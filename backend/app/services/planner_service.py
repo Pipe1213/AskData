@@ -1,4 +1,4 @@
-from app.schemas.query import ConversationMessage, QueryPlan
+from app.schemas.query import ConversationMessage, MemoryContext, QueryPlan
 from app.utils.text import significant_tokens
 
 REVENUE_TOKENS = {"revenue", "sale", "sales", "spend", "spent", "earning", "earnings"}
@@ -32,16 +32,26 @@ class PlannerService:
         self,
         question: str,
         conversation_context: list[ConversationMessage] | None = None,
+        memory_context: MemoryContext | None = None,
     ) -> QueryPlan:
         normalized_question = question.strip()
         question_tokens = significant_tokens(normalized_question)
-        memory_summary = self._build_memory_summary(conversation_context)
+        memory_summary = self._build_memory_summary(conversation_context, memory_context)
 
         task_type = self._classify_task_type(normalized_question, question_tokens, conversation_context or [])
         metric_targets = self._metric_targets(question_tokens)
         dimension_targets = self._dimension_targets(question_tokens)
         time_targets = self._time_targets(question_tokens)
         candidate_table_families = self._candidate_table_families(question_tokens)
+        metric_targets, dimension_targets, time_targets, candidate_table_families = self._apply_memory_context(
+            task_type=task_type,
+            question_tokens=question_tokens,
+            metric_targets=metric_targets,
+            dimension_targets=dimension_targets,
+            time_targets=time_targets,
+            candidate_table_families=candidate_table_families,
+            memory_context=memory_context,
+        )
         ambiguity_notes = self._ambiguity_notes(task_type, question_tokens, metric_targets, dimension_targets)
         confidence = self._confidence(task_type, ambiguity_notes, question_tokens)
 
@@ -56,6 +66,11 @@ class PlannerService:
             ambiguity_notes=ambiguity_notes,
             confidence=confidence,
             memory_summary=memory_summary,
+            inherited_from_turn_ids=(
+                memory_context.inherited_from_turn_ids
+                if memory_context is not None
+                else []
+            ),
         )
 
     def should_retry_with_broader_retrieval(self, plan: QueryPlan) -> bool:
@@ -124,7 +139,7 @@ class PlannerService:
         if question_tokens & RENTAL_TOKENS:
             families.append("rental")
         if question_tokens & CATEGORY_TOKENS:
-            families.extend(["category", "film_category"])
+            families.append("category")
         if question_tokens & TIME_TOKENS and "rental" not in families:
             families.append("rental")
         return list(dict.fromkeys(families))
@@ -174,10 +189,41 @@ class PlannerService:
             return "Answer conservatively because the request is underspecified."
         return f"Answer the user's business question: {question}"
 
+    def _apply_memory_context(
+        self,
+        task_type: str,
+        question_tokens: set[str],
+        metric_targets: list[str],
+        dimension_targets: list[str],
+        time_targets: list[str],
+        candidate_table_families: list[str],
+        memory_context: MemoryContext | None,
+    ) -> tuple[list[str], list[str], list[str], list[str]]:
+        if memory_context is None:
+            return metric_targets, dimension_targets, time_targets, candidate_table_families
+
+        should_inherit = task_type == "follow_up_refinement" or len(question_tokens) <= 4
+        if not should_inherit:
+            return metric_targets, dimension_targets, time_targets, candidate_table_families
+
+        if not metric_targets:
+            metric_targets = list(memory_context.suggested_metric_targets)
+        if not dimension_targets:
+            dimension_targets = list(memory_context.suggested_dimension_targets)
+        if not time_targets:
+            time_targets = list(memory_context.suggested_time_targets)
+        if not candidate_table_families:
+            candidate_table_families = list(memory_context.suggested_table_families)
+
+        return metric_targets, dimension_targets, time_targets, candidate_table_families
+
     def _build_memory_summary(
         self,
         conversation_context: list[ConversationMessage] | None,
+        memory_context: MemoryContext | None,
     ) -> str | None:
+        if memory_context is not None and memory_context.memory_summary:
+            return memory_context.memory_summary
         if not conversation_context:
             return None
 

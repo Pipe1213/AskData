@@ -3,6 +3,7 @@ from decimal import Decimal
 
 from app.llm.base import BaseLLMClient
 from app.schemas.execution import SQLExecutionResult
+from app.schemas.query import QueryPlan
 from app.services.response_formatter_service import ResponseFormatterService
 
 
@@ -14,7 +15,7 @@ class WeakSummaryLLMClient(BaseLLMClient):
         raise NotImplementedError
 
 
-def test_response_formatter_fallback_summary_uses_leading_row_details() -> None:
+def test_response_formatter_fallback_summary_uses_direct_business_language() -> None:
     service = ResponseFormatterService(settings=SimpleNamespace(openai_api_key=None))
     execution_result = SQLExecutionResult(
         sql="SELECT category, revenue FROM report",
@@ -32,7 +33,7 @@ def test_response_formatter_fallback_summary_uses_leading_row_details() -> None:
         warnings=[],
     )
 
-    assert "leading result" in response.answer_summary.lower()
+    assert "top result" in response.answer_summary.lower()
     assert "Sports" in response.answer_summary
     assert response.chart_recommendation.type == "bar"
 
@@ -59,7 +60,7 @@ def test_response_formatter_rejects_too_short_llm_summary() -> None:
     )
 
     assert response.answer_summary != "Top"
-    assert "leading result" in response.answer_summary.lower()
+    assert "highest revenue" in response.answer_summary.lower()
 
 
 def test_response_formatter_prefers_label_and_metric_over_identifier_columns() -> None:
@@ -80,8 +81,8 @@ def test_response_formatter_prefers_label_and_metric_over_identifier_columns() -
         warnings=[],
     )
 
-    assert "first_name=MARION" in response.answer_summary
-    assert "total_spent=64.87" in response.answer_summary
+    assert "MARION" in response.answer_summary
+    assert "64.87" in response.answer_summary
     assert response.chart_recommendation.type == "bar"
     assert response.chart_recommendation.x == "first_name"
     assert response.chart_recommendation.y == "total_spent"
@@ -127,7 +128,7 @@ def test_response_formatter_prefers_revenue_metric_over_count_for_spend_question
         warnings=[],
     )
 
-    assert "total_spent=64.87" in response.answer_summary
+    assert "64.87" in response.answer_summary
     assert response.chart_recommendation.y == "total_spent"
 
 
@@ -151,3 +152,58 @@ def test_response_formatter_avoids_chart_for_large_result_sets() -> None:
     )
 
     assert response.chart_recommendation.type == "table_only"
+
+
+def test_response_formatter_marks_ranking_question_as_table_primary() -> None:
+    service = ResponseFormatterService(settings=SimpleNamespace(openai_api_key=None))
+    execution_result = SQLExecutionResult(
+        sql="SELECT customer, total_spent FROM report",
+        success=True,
+        columns=["customer", "total_spent"],
+        rows=[["MARION", 64.87], ["ANA", 58.91]],
+        row_count=2,
+    )
+
+    response = service.format_query_response(
+        question="Which 10 customers spent the most in total?",
+        generated_sql=execution_result.sql,
+        execution_result=execution_result,
+        used_tables=["public.customer", "public.payment"],
+        warnings=[],
+        plan=QueryPlan(
+            task_type="ranking",
+            execution_strategy="single_query",
+            interpreted_goal="Return a ranked analytical answer using the strongest matching business metric.",
+        ),
+    )
+
+    assert response.primary_artifact == "table"
+    assert response.memory is not None
+
+
+def test_response_formatter_marks_trend_question_as_chart_primary() -> None:
+    service = ResponseFormatterService(settings=SimpleNamespace(openai_api_key=None))
+    execution_result = SQLExecutionResult(
+        sql="SELECT rental_month, rental_count FROM report",
+        success=True,
+        columns=["rental_month", "rental_count"],
+        rows=[["2022-01-01", 120], ["2022-02-01", 182], ["2022-03-01", 174]],
+        row_count=3,
+    )
+
+    response = service.format_query_response(
+        question="How many rentals happened each month?",
+        generated_sql=execution_result.sql,
+        execution_result=execution_result,
+        used_tables=["public.rental"],
+        warnings=[],
+        plan=QueryPlan(
+            task_type="trend",
+            execution_strategy="single_query",
+            interpreted_goal="Summarize how the requested metric changes over time.",
+        ),
+    )
+
+    assert response.primary_artifact == "chart"
+    assert "February 2022" in response.answer_summary
+    assert "182" in response.answer_summary

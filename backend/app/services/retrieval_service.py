@@ -1,7 +1,7 @@
 from collections import defaultdict
 
 from app.db.metadata_models import DatabaseSchema, TableMetadata
-from app.schemas.query import QueryPlan
+from app.schemas.query import MemoryContext, QueryPlan
 from app.schemas.retrieval import (
     RetrievedColumn,
     RetrievalIntentHints,
@@ -9,6 +9,7 @@ from app.schemas.retrieval import (
     RetrievedSchemaContext,
     RetrievedTable,
 )
+from app.services.dataset_adapters import DatasetAdapter
 from app.utils.text import significant_tokens
 
 REVENUE_TOKENS = {"revenue", "sale", "sales", "spend", "spent", "earning", "earnings"}
@@ -28,7 +29,6 @@ SEMANTIC_TABLE_HINTS: dict[str, set[str]] = {
     "staff": STAFF_TOKENS,
     "rental": RENTAL_TOKENS | TIME_TOKENS,
     "inventory": {"inventory", "stock"} | CATEGORY_TOKENS,
-    "film_category": CATEGORY_TOKENS,
     "category": CATEGORY_TOKENS,
 }
 
@@ -48,6 +48,8 @@ class RetrievalService:
         question: str,
         schema: DatabaseSchema,
         plan: QueryPlan | None = None,
+        memory_context: MemoryContext | None = None,
+        dataset_adapter: DatasetAdapter | None = None,
         max_tables: int = 5,
         max_columns_per_table: int = 8,
         broaden: bool = False,
@@ -96,8 +98,24 @@ class RetrievalService:
 
         if plan is not None:
             self._apply_plan_boosts(schema, plan, table_scores, column_scores)
+        if memory_context is not None:
+            self._apply_memory_boosts(
+                schema=schema,
+                plan=plan,
+                memory_context=memory_context,
+                question_tokens=question_tokens,
+                table_scores=table_scores,
+                column_scores=column_scores,
+            )
 
-        self._apply_composite_intent_boosts(schema, question_tokens, table_scores, column_scores)
+        if dataset_adapter is not None:
+            self._apply_adapter_boosts(
+                schema=schema,
+                question_tokens=question_tokens,
+                dataset_adapter=dataset_adapter,
+                table_scores=table_scores,
+                column_scores=column_scores,
+            )
 
         if broaden and plan is not None:
             self._apply_broader_retrieval_boosts(schema, plan, table_scores)
@@ -357,60 +375,27 @@ class RetrievalService:
         hint_tokens = SEMANTIC_COLUMN_HINTS.get(column_name, set())
         return len(question_tokens & hint_tokens) * 1.8
 
-    def _apply_composite_intent_boosts(
+    def _apply_adapter_boosts(
         self,
         schema: DatabaseSchema,
         question_tokens: set[str],
+        dataset_adapter: DatasetAdapter,
         table_scores: dict[str, float],
         column_scores: dict[str, dict[str, float]],
     ) -> None:
-        if question_tokens & REVENUE_TOKENS and question_tokens & CATEGORY_TOKENS:
-            self._boost_tables(
-                schema,
-                table_scores,
-                ["payment", "rental", "inventory", "film_category", "category"],
-                amount=5.5,
-            )
-            self._boost_columns(schema, column_scores, "payment", ["amount"], amount=4.5)
+        boosts = dataset_adapter.retrieval_boosts(question_tokens)
 
-        if question_tokens & REVENUE_TOKENS and question_tokens & CUSTOMER_TOKENS:
-            self._boost_tables(
-                schema,
-                table_scores,
-                ["payment", "customer"],
-                amount=6.5,
-            )
+        for table_families, amount in boosts.table_boosts:
+            self._boost_tables(schema, table_scores, table_families, amount=amount)
+
+        for column_boost in boosts.column_boosts:
             self._boost_columns(
                 schema,
                 column_scores,
-                "payment",
-                ["amount", "customer_id"],
-                amount=3.8,
+                column_boost.table_family,
+                column_boost.column_names,
+                amount=column_boost.amount,
             )
-
-        if question_tokens & REVENUE_TOKENS and question_tokens & STAFF_TOKENS:
-            self._boost_tables(
-                schema,
-                table_scores,
-                ["payment", "staff"],
-                amount=6.2,
-            )
-            self._boost_columns(
-                schema,
-                column_scores,
-                "payment",
-                ["amount", "staff_id"],
-                amount=4.0,
-            )
-
-        if question_tokens & RENTAL_TOKENS and question_tokens & TIME_TOKENS:
-            self._boost_tables(
-                schema,
-                table_scores,
-                ["rental"],
-                amount=3.5,
-            )
-            self._boost_columns(schema, column_scores, "rental", ["rental_date"], amount=4.0)
 
     def _apply_plan_boosts(
         self,
@@ -468,6 +453,38 @@ class RetrievalService:
                 continue
             for related_table in table.related_tables:
                 table_scores[related_table] += 1.8
+
+    def _apply_memory_boosts(
+        self,
+        schema: DatabaseSchema,
+        plan: QueryPlan | None,
+        memory_context: MemoryContext,
+        question_tokens: set[str],
+        table_scores: dict[str, float],
+        column_scores: dict[str, dict[str, float]],
+    ) -> None:
+        if plan is not None and plan.task_type != "follow_up_refinement" and len(question_tokens) > 4:
+            return
+
+        if memory_context.suggested_table_families:
+            self._boost_tables(
+                schema,
+                table_scores,
+                memory_context.suggested_table_families,
+                amount=4.8,
+            )
+
+        for table in schema.tables:
+            for column in table.columns:
+                if column.name in memory_context.suggested_metric_targets:
+                    column_scores[table.full_name][column.name] += 3.8
+                    table_scores[table.full_name] += 2.0
+                if column.name in memory_context.suggested_dimension_targets:
+                    column_scores[table.full_name][column.name] += 3.0
+                    table_scores[table.full_name] += 1.6
+                if column.name in memory_context.suggested_time_targets:
+                    column_scores[table.full_name][column.name] += 2.8
+                    table_scores[table.full_name] += 1.4
 
     def _boost_tables(
         self,

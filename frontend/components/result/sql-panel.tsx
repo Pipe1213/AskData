@@ -11,13 +11,15 @@ LIMIT 10;`;
 type SqlPanelProps = {
   sql?: string;
   isLoading: boolean;
-  variant?: "panel" | "embedded";
+  variant?: "panel" | "embedded" | "inline";
 };
 
 export function SqlPanel({ sql, isLoading, variant = "panel" }: SqlPanelProps) {
   const wrapperClass =
     variant === "embedded"
       ? "rounded-[24px] border border-line bg-[#171311] p-4"
+      : variant === "inline"
+        ? "rounded-[20px] bg-[#171311] p-4"
       : "panel p-5";
 
   return (
@@ -27,14 +29,14 @@ export function SqlPanel({ sql, isLoading, variant = "panel" }: SqlPanelProps) {
           <div className="eyebrow">SQL</div>
           <h3 className="section-title mt-4">Generated query</h3>
         </>
-      ) : (
+      ) : variant === "embedded" ? (
         <div className="mb-3 flex items-center justify-between gap-3">
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[#cdb7a8]">
             Generated SQL
           </p>
           <span className="text-xs text-[#cdb7a8]">{isLoading ? "pending" : "validated"}</span>
         </div>
-      )}
+      ) : null}
       <pre className={`${variant === "panel" ? "mt-4 rounded-[24px] bg-[#171311] p-4" : ""} overflow-x-auto text-sm leading-6 text-[#f5eadc]`}>
         <code>
           {isLoading

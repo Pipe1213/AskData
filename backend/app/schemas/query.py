@@ -3,6 +3,9 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 
+PrimaryArtifact = Literal["summary", "table", "chart", "chart_and_table"]
+
+
 class QueryPlan(BaseModel):
     task_type: Literal[
         "aggregation",
@@ -23,6 +26,7 @@ class QueryPlan(BaseModel):
     ambiguity_notes: list[str] = Field(default_factory=list)
     confidence: Literal["low", "medium", "high"] = "medium"
     memory_summary: str | None = None
+    inherited_from_turn_ids: list[str] = Field(default_factory=list)
 
 
 class QueryTraceStep(BaseModel):
@@ -38,6 +42,34 @@ class QueryTrace(BaseModel):
     schema_focus: list[str] = Field(default_factory=list)
     retries: list[str] = Field(default_factory=list)
     stages: list[QueryTraceStep] = Field(default_factory=list)
+    memory_summary: str | None = None
+
+
+class TurnMemory(BaseModel):
+    source_turn_id: str | None = None
+    question: str
+    task_type: str
+    interpreted_goal: str
+    metric_targets: list[str] = Field(default_factory=list)
+    dimension_targets: list[str] = Field(default_factory=list)
+    time_targets: list[str] = Field(default_factory=list)
+    candidate_table_families: list[str] = Field(default_factory=list)
+    used_tables: list[str] = Field(default_factory=list)
+    generated_sql: str
+    answer_summary: str
+    row_count: int = 0
+    result_focus: str | None = None
+    memory_tags: list[str] = Field(default_factory=list)
+
+
+class MemoryContext(BaseModel):
+    relevant_turn_memories: list[TurnMemory] = Field(default_factory=list)
+    memory_summary: str | None = None
+    suggested_metric_targets: list[str] = Field(default_factory=list)
+    suggested_dimension_targets: list[str] = Field(default_factory=list)
+    suggested_time_targets: list[str] = Field(default_factory=list)
+    suggested_table_families: list[str] = Field(default_factory=list)
+    inherited_from_turn_ids: list[str] = Field(default_factory=list)
 
 
 class SQLGenerationResult(BaseModel):
@@ -79,6 +111,7 @@ class DebugPayload(BaseModel):
     planner_confidence: str | None = None
     planner_table_families: list[str] = Field(default_factory=list)
     retry_reasons: list[str] = Field(default_factory=list)
+    inherited_turn_ids: list[str] = Field(default_factory=list)
 
 
 class QueryResponse(BaseModel):
@@ -96,6 +129,8 @@ class QueryResponse(BaseModel):
     persisted: bool = False
     created_at: str | None = None
     repaired: bool = False
+    primary_artifact: PrimaryArtifact = "summary"
+    memory: TurnMemory | None = None
     plan: QueryPlan | None = None
     trace: QueryTrace | None = None
     debug: DebugPayload | None = None
