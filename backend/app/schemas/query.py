@@ -3,6 +3,43 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 
+class QueryPlan(BaseModel):
+    task_type: Literal[
+        "aggregation",
+        "comparison",
+        "follow_up_refinement",
+        "lookup",
+        "ranking",
+        "schema_lookup",
+        "trend",
+        "ambiguous",
+    ] = "lookup"
+    execution_strategy: Literal["single_query", "schema_guided"] = "single_query"
+    interpreted_goal: str
+    metric_targets: list[str] = Field(default_factory=list)
+    dimension_targets: list[str] = Field(default_factory=list)
+    time_targets: list[str] = Field(default_factory=list)
+    candidate_table_families: list[str] = Field(default_factory=list)
+    ambiguity_notes: list[str] = Field(default_factory=list)
+    confidence: Literal["low", "medium", "high"] = "medium"
+    memory_summary: str | None = None
+
+
+class QueryTraceStep(BaseModel):
+    stage: Literal["plan", "retrieve", "retry", "repair", "execute"]
+    label: str
+    detail: str | None = None
+
+
+class QueryTrace(BaseModel):
+    task_type: str
+    interpreted_goal: str
+    confidence: Literal["low", "medium", "high"]
+    schema_focus: list[str] = Field(default_factory=list)
+    retries: list[str] = Field(default_factory=list)
+    stages: list[QueryTraceStep] = Field(default_factory=list)
+
+
 class SQLGenerationResult(BaseModel):
     sql: str
     used_tables: list[str] = Field(default_factory=list)
@@ -38,6 +75,10 @@ class DebugPayload(BaseModel):
     validation_classification: str | None = None
     detected_tables: list[str] = Field(default_factory=list)
     repair_attempted: bool = False
+    planner_task_type: str | None = None
+    planner_confidence: str | None = None
+    planner_table_families: list[str] = Field(default_factory=list)
+    retry_reasons: list[str] = Field(default_factory=list)
 
 
 class QueryResponse(BaseModel):
@@ -55,6 +96,8 @@ class QueryResponse(BaseModel):
     persisted: bool = False
     created_at: str | None = None
     repaired: bool = False
+    plan: QueryPlan | None = None
+    trace: QueryTrace | None = None
     debug: DebugPayload | None = None
 
 
@@ -71,4 +114,6 @@ class QueryErrorResponse(BaseModel):
     turn_id: str | None = None
     persisted: bool = False
     created_at: str | None = None
+    plan: QueryPlan | None = None
+    trace: QueryTrace | None = None
     debug: DebugPayload | None = None

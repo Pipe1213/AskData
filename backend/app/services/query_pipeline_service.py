@@ -2,7 +2,15 @@ from app.core.config import Settings, get_settings
 from app.core.exceptions import QueryPipelineError
 from app.db.metadata_models import DatabaseSchema
 from app.llm.base import LLMClientError
-from app.schemas.query import ConversationMessage, DebugPayload, QueryResponse
+from app.schemas.query import (
+    ConversationMessage,
+    DebugPayload,
+    QueryPlan,
+    QueryResponse,
+    QueryTrace,
+    QueryTraceStep,
+)
+from app.services.planner_service import PlannerService
 from app.services.response_formatter_service import ResponseFormatterService
 from app.services.retrieval_service import RetrievalService
 from app.services.sql_execution_service import SQLExecutionService
@@ -14,6 +22,7 @@ from app.utils.text import significant_tokens
 class QueryPipelineService:
     def __init__(
         self,
+        planner_service: PlannerService | None = None,
         retrieval_service: RetrievalService | None = None,
         sql_generation_service: SQLGenerationService | None = None,
         sql_validation_service: SQLValidationService | None = None,
@@ -22,6 +31,7 @@ class QueryPipelineService:
         settings: Settings | None = None,
     ) -> None:
         self.settings = settings or get_settings()
+        self.planner_service = planner_service or PlannerService()
         self.retrieval_service = retrieval_service or RetrievalService()
         self.sql_generation_service = sql_generation_service or SQLGenerationService(
             settings=self.settings
@@ -63,14 +73,121 @@ class QueryPipelineService:
         normalized_conversation_context = self._normalize_conversation_context(
             conversation_context
         )
-        retrieval_question = self._build_retrieval_question(
+        plan = self.planner_service.build_plan(
             normalized_question,
-            normalized_conversation_context,
+            conversation_context=normalized_conversation_context,
         )
+        trace = self._new_trace(plan)
+        retry_reasons: list[str] = []
+        original_error: QueryPipelineError | None = None
 
+        try:
+            attempt = self._run_attempt(
+                question=normalized_question,
+                schema=schema,
+                conversation_context=normalized_conversation_context,
+                plan=plan,
+                broaden=False,
+                trace=trace,
+            )
+        except QueryPipelineError as exc:
+            original_error = exc
+            if not self._should_retry_after_error(exc, plan):
+                raise
+
+            retry_reason = "The first attempt failed, so AskData broadened the schema search and retried once."
+            retry_reasons.append(retry_reason)
+            trace.retries.append(retry_reason)
+            trace.stages.append(
+                QueryTraceStep(
+                    stage="retry",
+                    label="Broadened schema search",
+                    detail=exc.message,
+                )
+            )
+            attempt = self._run_attempt(
+                question=normalized_question,
+                schema=schema,
+                conversation_context=normalized_conversation_context,
+                plan=plan,
+                broaden=True,
+                trace=trace,
+            )
+
+        if self._should_retry_after_no_rows(
+            plan=plan,
+            attempt=attempt,
+            retry_reasons=retry_reasons,
+        ):
+            retry_reason = "The first query returned no rows, so AskData retried once with a broader schema focus."
+            retry_reasons.append(retry_reason)
+            trace.retries.append(retry_reason)
+            trace.stages.append(
+                QueryTraceStep(
+                    stage="retry",
+                    label="Retried after no rows",
+                    detail="Expanded the schema context to avoid an over-restrictive first interpretation.",
+                )
+            )
+            try:
+                broader_attempt = self._run_attempt(
+                    question=normalized_question,
+                    schema=schema,
+                    conversation_context=normalized_conversation_context,
+                    plan=plan,
+                    broaden=True,
+                    trace=trace,
+                )
+                if broader_attempt["pipeline_result"]["execution_result"].row_count > 0:
+                    attempt = broader_attempt
+            except QueryPipelineError:
+                if original_error is not None:
+                    raise original_error
+
+        response = self._build_response(
+            question=normalized_question,
+            schema=schema,
+            plan=plan,
+            attempt=attempt,
+            trace=trace,
+            retry_reasons=retry_reasons,
+        )
+        if self.settings.debug_mode:
+            return response.model_copy(
+                update={
+                    "debug": DebugPayload(
+                        stage="success",
+                        retrieval_tables=[table.full_name for table in attempt["retrieval_context"].tables],
+                        validation_classification=attempt["pipeline_result"]["validation_result"].classification,
+                        detected_tables=attempt["pipeline_result"]["validation_result"].detected_tables,
+                        repair_attempted=bool(attempt["pipeline_result"]["repair_warnings"]),
+                        planner_task_type=plan.task_type,
+                        planner_confidence=plan.confidence,
+                        planner_table_families=plan.candidate_table_families,
+                        retry_reasons=retry_reasons,
+                    )
+                }
+            )
+
+        return response
+
+    def _run_attempt(
+        self,
+        question: str,
+        schema: DatabaseSchema,
+        conversation_context: list[ConversationMessage],
+        plan: QueryPlan,
+        broaden: bool,
+        trace: QueryTrace,
+    ) -> dict:
+        retrieval_question = self._build_retrieval_question(question, conversation_context)
         retrieval_context = self.retrieval_service.retrieve_schema_context(
             retrieval_question,
             schema,
+            plan=plan,
+            max_tables=8 if broaden else 5,
+            max_columns_per_table=10 if broaden else 8,
+            broaden=broaden,
         )
         if not retrieval_context.tables:
             raise QueryPipelineError(
@@ -81,11 +198,28 @@ class QueryPipelineService:
                 details={"warnings": retrieval_context.warnings},
             )
 
+        trace.stages.append(
+            QueryTraceStep(
+                stage="retrieve",
+                label="Focused on schema area",
+                detail=", ".join(table.table_name for table in retrieval_context.tables[:4]),
+            )
+        )
+        trace.schema_focus = list(
+            dict.fromkeys(
+                [
+                    *plan.candidate_table_families,
+                    *retrieval_context.intent_hints.table_family_hints,
+                ]
+            )
+        )
+
         try:
             generation_result = self.sql_generation_service.generate_sql(
-                question=normalized_question,
+                question=question,
                 schema_context=retrieval_context,
-                conversation_context=normalized_conversation_context,
+                conversation_context=conversation_context,
+                plan=plan,
             )
         except LLMClientError as exc:
             raise QueryPipelineError(
@@ -96,58 +230,79 @@ class QueryPipelineService:
             ) from exc
 
         generation_result, semantic_review_warnings = self._apply_semantic_review(
-            question=normalized_question,
+            question=question,
             retrieval_context=retrieval_context,
             generation_result=generation_result,
-            conversation_context=normalized_conversation_context,
+            conversation_context=conversation_context,
+            plan=plan,
+            trace=trace,
         )
 
         pipeline_result = self._validate_and_execute_once(
-            question=normalized_question,
+            question=question,
             retrieval_context=retrieval_context,
             generation_result=generation_result,
             allow_repair=True,
-            conversation_context=normalized_conversation_context,
+            conversation_context=conversation_context,
+            plan=plan,
+            trace=trace,
         )
 
+        return {
+            "retrieval_context": retrieval_context,
+            "generation_result": generation_result,
+            "pipeline_result": pipeline_result,
+            "semantic_review_warnings": semantic_review_warnings,
+        }
+
+    def _build_response(
+        self,
+        question: str,
+        schema: DatabaseSchema,
+        plan: QueryPlan,
+        attempt: dict,
+        trace: QueryTrace,
+        retry_reasons: list[str],
+    ) -> QueryResponse:
         used_tables = self._merge_used_tables(
             schema=schema,
-            generated_tables=pipeline_result["generation_result"].used_tables,
-            detected_tables=pipeline_result["validation_result"].detected_tables,
+            generated_tables=attempt["pipeline_result"]["generation_result"].used_tables,
+            detected_tables=attempt["pipeline_result"]["validation_result"].detected_tables,
         )
         merged_warnings = [
-            *retrieval_context.warnings,
-            *pipeline_result["generation_result"].notes,
-            *pipeline_result["validation_result"].warnings,
-            *semantic_review_warnings,
-            *pipeline_result["repair_warnings"],
+            *attempt["retrieval_context"].warnings,
+            *attempt["pipeline_result"]["generation_result"].notes,
+            *attempt["pipeline_result"]["validation_result"].warnings,
+            *attempt["semantic_review_warnings"],
+            *attempt["pipeline_result"]["repair_warnings"],
+            *retry_reasons,
         ]
 
-        response = self.response_formatter_service.format_query_response(
-            question=normalized_question,
+        execution_result = attempt["pipeline_result"]["execution_result"]
+        trace.stages.append(
+            QueryTraceStep(
+                stage="execute",
+                label="Returned result",
+                detail=f"{execution_result.row_count} rows returned",
+            )
+        )
+
+        return self.response_formatter_service.format_query_response(
+            question=question,
             generated_sql=(
-                pipeline_result["validation_result"].validated_sql
-                or pipeline_result["generation_result"].sql
+                attempt["pipeline_result"]["validation_result"].validated_sql
+                or attempt["pipeline_result"]["generation_result"].sql
             ),
-            execution_result=pipeline_result["execution_result"],
+            execution_result=execution_result,
             used_tables=used_tables,
             warnings=merged_warnings,
-            repaired=bool(pipeline_result["repair_warnings"] or semantic_review_warnings),
+            repaired=bool(
+                attempt["pipeline_result"]["repair_warnings"]
+                or attempt["semantic_review_warnings"]
+            ),
+            plan=plan,
+            trace=trace,
         )
-        if self.settings.debug_mode:
-            return response.model_copy(
-                update={
-                    "debug": DebugPayload(
-                        stage="success",
-                        retrieval_tables=[table.full_name for table in retrieval_context.tables],
-                        validation_classification=pipeline_result["validation_result"].classification,
-                        detected_tables=pipeline_result["validation_result"].detected_tables,
-                        repair_attempted=bool(pipeline_result["repair_warnings"]),
-                    )
-                }
-            )
-
-        return response
 
     def _apply_semantic_review(
         self,
@@ -155,6 +310,8 @@ class QueryPipelineService:
         retrieval_context,
         generation_result,
         conversation_context: list[ConversationMessage],
+        plan: QueryPlan,
+        trace: QueryTrace,
     ):
         if not hasattr(self.sql_generation_service, "review_sql"):
             return generation_result, []
@@ -165,6 +322,7 @@ class QueryPipelineService:
                 schema_context=retrieval_context,
                 generated_sql=generation_result.sql,
                 conversation_context=conversation_context,
+                plan=plan,
             )
         except LLMClientError:
             return generation_result, []
@@ -181,12 +339,22 @@ class QueryPipelineService:
                 question=question,
                 schema_context=retrieval_context,
                 previous_sql=generation_result.sql,
-                failure_message="Semantic review: " + "; ".join(issues or ["Refocus the SQL on the user's business intent."]),
+                failure_message="Semantic review: " + "; ".join(
+                    issues or ["Refocus the SQL on the user's business intent."]
+                ),
                 conversation_context=conversation_context,
+                plan=plan,
             )
         except LLMClientError:
             return generation_result, []
 
+        trace.stages.append(
+            QueryTraceStep(
+                stage="repair",
+                label="Rewrote SQL after semantic review",
+                detail="Aligned the generated query more closely with the interpreted business intent.",
+            )
+        )
         return rewritten, ["SQL was rewritten once after a semantic review."]
 
     def _validate_and_execute_once(
@@ -196,6 +364,8 @@ class QueryPipelineService:
         generation_result,
         allow_repair: bool,
         conversation_context: list[ConversationMessage],
+        plan: QueryPlan,
+        trace: QueryTrace,
     ) -> dict:
         validation_result = self.sql_validation_service.validate_sql(generation_result.sql)
         if not validation_result.is_valid:
@@ -216,6 +386,8 @@ class QueryPipelineService:
                     failure_message="; ".join(validation_result.errors),
                     repair_stage="validation",
                     conversation_context=conversation_context,
+                    plan=plan,
+                    trace=trace,
                 )
                 result = self._validate_and_execute_once(
                     question=question,
@@ -223,6 +395,8 @@ class QueryPipelineService:
                     generation_result=repaired_result,
                     allow_repair=False,
                     conversation_context=conversation_context,
+                    plan=plan,
+                    trace=trace,
                 )
                 result["repair_warnings"] = [
                     "SQL was repaired once after a validation failure.",
@@ -254,6 +428,8 @@ class QueryPipelineService:
                     ),
                     repair_stage="execution",
                     conversation_context=conversation_context,
+                    plan=plan,
+                    trace=trace,
                 )
                 result = self._validate_and_execute_once(
                     question=question,
@@ -261,6 +437,8 @@ class QueryPipelineService:
                     generation_result=repaired_result,
                     allow_repair=False,
                     conversation_context=conversation_context,
+                    plan=plan,
+                    trace=trace,
                 )
                 result["repair_warnings"] = [
                     "SQL was repaired once after an execution failure.",
@@ -299,15 +477,26 @@ class QueryPipelineService:
         failure_message: str,
         repair_stage: str,
         conversation_context: list[ConversationMessage],
+        plan: QueryPlan,
+        trace: QueryTrace,
     ):
         try:
-            return self.sql_generation_service.repair_sql(
+            repaired = self.sql_generation_service.repair_sql(
                 question=question,
                 schema_context=retrieval_context,
                 previous_sql=previous_sql,
                 failure_message=failure_message,
                 conversation_context=conversation_context,
+                plan=plan,
             )
+            trace.stages.append(
+                QueryTraceStep(
+                    stage="repair",
+                    label=f"Repaired SQL after {repair_stage} issue",
+                    detail=failure_message[:180],
+                )
+            )
+            return repaired
         except LLMClientError as exc:
             raise QueryPipelineError(
                 code="sql_generation_failed",
@@ -426,3 +615,39 @@ class QueryPipelineService:
             return True
 
         return any(term in normalized_question.split() for term in referential_terms)
+
+    def _new_trace(self, plan: QueryPlan) -> QueryTrace:
+        stages = [
+            QueryTraceStep(
+                stage="plan",
+                label="Planned the answer strategy",
+                detail=plan.interpreted_goal,
+            )
+        ]
+        return QueryTrace(
+            task_type=plan.task_type,
+            interpreted_goal=plan.interpreted_goal,
+            confidence=plan.confidence,
+            schema_focus=list(plan.candidate_table_families),
+            retries=[],
+            stages=stages,
+        )
+
+    def _should_retry_after_error(self, exc: QueryPipelineError, plan: QueryPlan) -> bool:
+        if exc.code in {"unsafe_sql", "schema_unavailable"}:
+            return False
+        if not self.planner_service.should_retry_with_broader_retrieval(plan):
+            return False
+        return exc.code in {"invalid_request", "sql_generation_failed", "sql_validation_failed", "sql_execution_failed"}
+
+    def _should_retry_after_no_rows(
+        self,
+        plan: QueryPlan,
+        attempt: dict,
+        retry_reasons: list[str],
+    ) -> bool:
+        if retry_reasons:
+            return False
+        if not self.planner_service.should_retry_with_broader_retrieval(plan):
+            return False
+        return attempt["pipeline_result"]["execution_result"].row_count == 0

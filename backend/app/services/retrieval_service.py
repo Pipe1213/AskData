@@ -1,6 +1,7 @@
 from collections import defaultdict
 
 from app.db.metadata_models import DatabaseSchema, TableMetadata
+from app.schemas.query import QueryPlan
 from app.schemas.retrieval import (
     RetrievedColumn,
     RetrievalIntentHints,
@@ -46,8 +47,10 @@ class RetrievalService:
         self,
         question: str,
         schema: DatabaseSchema,
+        plan: QueryPlan | None = None,
         max_tables: int = 5,
         max_columns_per_table: int = 8,
+        broaden: bool = False,
     ) -> RetrievedSchemaContext:
         question_tokens = significant_tokens(question)
         table_scores: dict[str, float] = defaultdict(float)
@@ -91,7 +94,13 @@ class RetrievalService:
                 column_scores[table.full_name][column.name] += total_column_boost
                 table_scores[table.full_name] += total_column_boost
 
+        if plan is not None:
+            self._apply_plan_boosts(schema, plan, table_scores, column_scores)
+
         self._apply_composite_intent_boosts(schema, question_tokens, table_scores, column_scores)
+
+        if broaden and plan is not None:
+            self._apply_broader_retrieval_boosts(schema, plan, table_scores)
 
         expanded_scores = self._expand_scores_with_relationships(schema, table_scores)
         ranked_tables = self._rank_tables(
@@ -104,6 +113,8 @@ class RetrievalService:
         )
         relationships = self._collect_relationships(schema, ranked_tables)
         warnings = self._build_warnings(question_tokens, ranked_tables)
+        if plan is not None:
+            warnings.extend(note for note in plan.ambiguity_notes if note not in warnings)
         intent_hints = self._build_intent_hints(question_tokens, ranked_tables)
 
         return RetrievedSchemaContext(
@@ -400,6 +411,63 @@ class RetrievalService:
                 amount=3.5,
             )
             self._boost_columns(schema, column_scores, "rental", ["rental_date"], amount=4.0)
+
+    def _apply_plan_boosts(
+        self,
+        schema: DatabaseSchema,
+        plan: QueryPlan,
+        table_scores: dict[str, float],
+        column_scores: dict[str, dict[str, float]],
+    ) -> None:
+        if plan.candidate_table_families:
+            self._boost_tables(
+                schema,
+                table_scores,
+                plan.candidate_table_families,
+                amount=6.0,
+            )
+
+        for table in schema.tables:
+            if plan.candidate_table_families and self._canonical_table_family(table.table_name) not in plan.candidate_table_families:
+                continue
+
+            for metric_hint in plan.metric_targets:
+                for column in table.columns:
+                    if metric_hint in column.name.lower():
+                        column_scores[table.full_name][column.name] += 4.5
+                        table_scores[table.full_name] += 2.5
+
+            for dimension_hint in plan.dimension_targets:
+                for column in table.columns:
+                    if dimension_hint in column.name.lower():
+                        column_scores[table.full_name][column.name] += 3.0
+                        table_scores[table.full_name] += 1.8
+
+            for time_hint in plan.time_targets:
+                for column in table.columns:
+                    if time_hint in column.name.lower():
+                        column_scores[table.full_name][column.name] += 3.0
+                        table_scores[table.full_name] += 1.6
+
+    def _apply_broader_retrieval_boosts(
+        self,
+        schema: DatabaseSchema,
+        plan: QueryPlan,
+        table_scores: dict[str, float],
+    ) -> None:
+        if plan.candidate_table_families:
+            self._boost_tables(
+                schema,
+                table_scores,
+                plan.candidate_table_families,
+                amount=2.5,
+            )
+
+        for table in schema.tables:
+            if table_scores.get(table.full_name, 0.0) <= 0:
+                continue
+            for related_table in table.related_tables:
+                table_scores[related_table] += 1.8
 
     def _boost_tables(
         self,

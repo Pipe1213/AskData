@@ -59,11 +59,25 @@ class SessionService:
                         chart_y TEXT,
                         warnings_json JSONB NOT NULL DEFAULT '[]'::jsonb,
                         used_tables_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+                        plan_json JSONB NOT NULL DEFAULT '{{}}'::jsonb,
+                        trace_json JSONB NOT NULL DEFAULT '{{}}'::jsonb,
                         error_code TEXT,
                         error_message TEXT,
                         repaired BOOLEAN NOT NULL DEFAULT FALSE,
                         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                     )
+                    """
+                )
+                cursor.execute(
+                    f"""
+                    ALTER TABLE {self.schema_name}.chat_turns
+                    ADD COLUMN IF NOT EXISTS plan_json JSONB NOT NULL DEFAULT '{{}}'::jsonb
+                    """
+                )
+                cursor.execute(
+                    f"""
+                    ALTER TABLE {self.schema_name}.chat_turns
+                    ADD COLUMN IF NOT EXISTS trace_json JSONB NOT NULL DEFAULT '{{}}'::jsonb
                     """
                 )
                 cursor.execute(
@@ -157,6 +171,8 @@ class SessionService:
                         chart_y,
                         warnings_json,
                         used_tables_json,
+                        plan_json,
+                        trace_json,
                         error_code,
                         error_message,
                         repaired,
@@ -242,9 +258,11 @@ class SessionService:
                         chart_y,
                         warnings_json,
                         used_tables_json,
+                        plan_json,
+                        trace_json,
                         repaired
                     ) VALUES (
-                        %s, %s, %s, 'success', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                        %s, %s, %s, 'success', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                     )
                     RETURNING created_at
                     """,
@@ -262,6 +280,8 @@ class SessionService:
                         response.chart_recommendation.y,
                         Jsonb(self._to_jsonable(response.warnings)),
                         Jsonb(self._to_jsonable(response.used_tables)),
+                        Jsonb(self._to_jsonable(response.plan.model_dump() if response.plan else {})),
+                        Jsonb(self._to_jsonable(response.trace.model_dump() if response.trace else {})),
                         response.repaired,
                     ),
                 )
@@ -306,10 +326,12 @@ class SessionService:
                         status,
                         warnings_json,
                         used_tables_json,
+                        plan_json,
+                        trace_json,
                         error_code,
                         error_message
                     ) VALUES (
-                        %s, %s, %s, 'error', %s, '[]'::jsonb, %s, %s
+                        %s, %s, %s, 'error', %s, '[]'::jsonb, %s, %s, %s, %s
                     )
                     RETURNING created_at
                     """,
@@ -318,6 +340,8 @@ class SessionService:
                         active_session_id,
                         question,
                         Jsonb(self._to_jsonable(error_payload.warnings)),
+                        Jsonb(self._to_jsonable(error_payload.plan.model_dump() if error_payload.plan else {})),
+                        Jsonb(self._to_jsonable(error_payload.trace.model_dump() if error_payload.trace else {})),
                         error_payload.error.code,
                         error_payload.error.message,
                     ),
@@ -477,6 +501,8 @@ class SessionService:
                 persisted=True,
                 created_at=created_at,
                 repaired=bool(row["repaired"]),
+                plan=(row["plan_json"] or None),
+                trace=(row["trace_json"] or None),
             )
             return SessionTurn(
                 id=row["id"],
@@ -497,6 +523,8 @@ class SessionService:
             turn_id=row["id"],
             persisted=True,
             created_at=created_at,
+            plan=(row["plan_json"] or None),
+            trace=(row["trace_json"] or None),
         )
         return SessionTurn(
             id=row["id"],

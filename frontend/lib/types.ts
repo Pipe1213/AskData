@@ -9,6 +9,42 @@ export type ConversationMessage = {
   content: string;
 };
 
+export type QueryPlan = {
+  task_type:
+    | "aggregation"
+    | "comparison"
+    | "follow_up_refinement"
+    | "lookup"
+    | "ranking"
+    | "schema_lookup"
+    | "trend"
+    | "ambiguous";
+  execution_strategy: "single_query" | "schema_guided";
+  interpreted_goal: string;
+  metric_targets: string[];
+  dimension_targets: string[];
+  time_targets: string[];
+  candidate_table_families: string[];
+  ambiguity_notes: string[];
+  confidence: "low" | "medium" | "high";
+  memory_summary?: string | null;
+};
+
+export type QueryTraceStep = {
+  stage: "plan" | "retrieve" | "retry" | "repair" | "execute";
+  label: string;
+  detail?: string | null;
+};
+
+export type QueryTrace = {
+  task_type: string;
+  interpreted_goal: string;
+  confidence: "low" | "medium" | "high";
+  schema_focus: string[];
+  retries: string[];
+  stages: QueryTraceStep[];
+};
+
 export type QueryRequest = {
   question: string;
   session_id?: string | null;
@@ -30,12 +66,18 @@ export type QueryResponse = {
   persisted: boolean;
   created_at?: string | null;
   repaired: boolean;
+  plan?: QueryPlan | null;
+  trace?: QueryTrace | null;
   debug?: {
     stage?: string | null;
     retrieval_tables: string[];
     validation_classification?: string | null;
     detected_tables: string[];
     repair_attempted: boolean;
+    planner_task_type?: string | null;
+    planner_confidence?: string | null;
+    planner_table_families: string[];
+    retry_reasons: string[];
   } | null;
 };
 
@@ -50,12 +92,18 @@ export type QueryErrorResponse = {
   turn_id?: string | null;
   persisted: boolean;
   created_at?: string | null;
+  plan?: QueryPlan | null;
+  trace?: QueryTrace | null;
   debug?: {
     stage?: string | null;
     retrieval_tables: string[];
     validation_classification?: string | null;
     detected_tables: string[];
     repair_attempted: boolean;
+    planner_task_type?: string | null;
+    planner_confidence?: string | null;
+    planner_table_families: string[];
+    retry_reasons: string[];
   } | null;
 };
 

@@ -9,6 +9,7 @@ from app.llm.prompt_builders import (
 from app.llm.response_models import LLMGenerationConfig, LLMMessage
 from app.schemas.query import (
     ConversationMessage,
+    QueryPlan,
     SQLGenerationResult,
     SQLSemanticReviewResult,
 )
@@ -29,12 +30,14 @@ class SQLGenerationService:
         question: str,
         schema_context: RetrievedSchemaContext,
         conversation_context: list[ConversationMessage] | None = None,
+        plan: QueryPlan | None = None,
     ) -> SQLGenerationResult:
         messages = build_sql_generation_messages(
             question=question,
             schema_context=schema_context,
             max_result_rows=self.settings.max_result_rows,
             conversation_context=conversation_context,
+            plan=plan,
         )
         return self._run_structured_generation(messages)
 
@@ -45,6 +48,7 @@ class SQLGenerationService:
         previous_sql: str,
         failure_message: str,
         conversation_context: list[ConversationMessage] | None = None,
+        plan: QueryPlan | None = None,
     ) -> SQLGenerationResult:
         messages = build_sql_repair_messages(
             question=question,
@@ -53,6 +57,7 @@ class SQLGenerationService:
             failure_message=failure_message,
             max_result_rows=self.settings.max_result_rows,
             conversation_context=conversation_context,
+            plan=plan,
         )
         return self._run_structured_generation(messages)
 
@@ -62,12 +67,14 @@ class SQLGenerationService:
         schema_context: RetrievedSchemaContext,
         generated_sql: str,
         conversation_context: list[ConversationMessage] | None = None,
+        plan: QueryPlan | None = None,
     ) -> SQLSemanticReviewResult:
         messages = build_sql_semantic_review_messages(
             question=question,
             schema_context=schema_context,
             generated_sql=generated_sql,
             conversation_context=conversation_context,
+            plan=plan,
         )
         llm_messages = [LLMMessage.model_validate(message) for message in messages]
 

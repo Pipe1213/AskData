@@ -6,7 +6,7 @@ from app.llm.openai_client import OpenAILLMClient
 from app.llm.prompt_builders import build_answer_summary_messages
 from app.llm.response_models import LLMGenerationConfig, LLMMessage
 from app.schemas.execution import SQLExecutionResult
-from app.schemas.query import ChartRecommendation, QueryResponse
+from app.schemas.query import ChartRecommendation, QueryPlan, QueryResponse, QueryTrace
 from app.utils.text import significant_tokens
 
 
@@ -27,6 +27,8 @@ class ResponseFormatterService:
         used_tables: list[str],
         warnings: list[str] | None = None,
         repaired: bool = False,
+        plan: QueryPlan | None = None,
+        trace: QueryTrace | None = None,
     ) -> QueryResponse:
         if not execution_result.success:
             raise ValueError("Execution result must be successful before formatting a query response.")
@@ -49,6 +51,8 @@ class ResponseFormatterService:
             warnings=merged_warnings,
             used_tables=sorted(set(used_tables)),
             repaired=repaired,
+            plan=plan,
+            trace=trace,
         )
 
     def _build_answer_summary(

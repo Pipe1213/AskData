@@ -1,6 +1,6 @@
 import json
 
-from app.schemas.query import ConversationMessage
+from app.schemas.query import ConversationMessage, QueryPlan
 from app.schemas.retrieval import RetrievedSchemaContext
 from app.utils.text import significant_tokens
 
@@ -10,6 +10,7 @@ def build_sql_generation_messages(
     schema_context: RetrievedSchemaContext,
     max_result_rows: int,
     conversation_context: list[ConversationMessage] | None = None,
+    plan: QueryPlan | None = None,
 ) -> list[dict[str, str]]:
     domain_hints = _build_pagila_domain_hints(question)
     system_prompt = f"""
@@ -44,6 +45,9 @@ Retrieved schema context:
 
 Intent hints:
 {_format_intent_hints(schema_context)}
+
+Planner output:
+{_format_query_plan(plan)}
 
 Return:
 - `sql`: the generated PostgreSQL query
@@ -114,6 +118,32 @@ def _format_conversation_context(
     )
 
 
+def _format_query_plan(plan: QueryPlan | None) -> str:
+    if plan is None:
+        return "None"
+
+    sections = [
+        f"Task type: {plan.task_type}",
+        f"Execution strategy: {plan.execution_strategy}",
+        f"Interpreted goal: {plan.interpreted_goal}",
+        f"Confidence: {plan.confidence}",
+    ]
+    if plan.metric_targets:
+        sections.append("Metric targets: " + ", ".join(plan.metric_targets))
+    if plan.dimension_targets:
+        sections.append("Dimension targets: " + ", ".join(plan.dimension_targets))
+    if plan.time_targets:
+        sections.append("Time targets: " + ", ".join(plan.time_targets))
+    if plan.candidate_table_families:
+        sections.append("Candidate table families: " + ", ".join(plan.candidate_table_families))
+    if plan.ambiguity_notes:
+        sections.append("Ambiguity notes: " + "; ".join(plan.ambiguity_notes))
+    if plan.memory_summary:
+        sections.append("Session memory: " + plan.memory_summary)
+
+    return "\n".join(sections)
+
+
 def build_answer_summary_messages(
     question: str,
     generated_sql: str,
@@ -155,6 +185,7 @@ def build_sql_repair_messages(
     failure_message: str,
     max_result_rows: int,
     conversation_context: list[ConversationMessage] | None = None,
+    plan: QueryPlan | None = None,
 ) -> list[dict[str, str]]:
     domain_hints = _build_pagila_domain_hints(question)
     system_prompt = f"""
@@ -188,6 +219,9 @@ Retrieved schema context:
 
 Intent hints:
 {_format_intent_hints(schema_context)}
+
+Planner output:
+{_format_query_plan(plan)}
 
 Previous SQL:
 {previous_sql}
@@ -235,6 +269,7 @@ def build_sql_semantic_review_messages(
     schema_context: RetrievedSchemaContext,
     generated_sql: str,
     conversation_context: list[ConversationMessage] | None = None,
+    plan: QueryPlan | None = None,
 ) -> list[dict[str, str]]:
     system_prompt = """
 You review a generated PostgreSQL analytics query before execution.
@@ -260,6 +295,9 @@ Retrieved schema context:
 
 Intent hints:
 {_format_intent_hints(schema_context)}
+
+Planner output:
+{_format_query_plan(plan)}
 
 Candidate SQL:
 {generated_sql}

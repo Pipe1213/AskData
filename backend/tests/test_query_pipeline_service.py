@@ -4,7 +4,9 @@ from app.schemas.execution import SQLExecutionResult
 from app.schemas.query import (
     ChartRecommendation,
     ConversationMessage,
+    QueryPlan,
     QueryResponse,
+    QueryTrace,
     SQLGenerationResult,
     SQLSemanticReviewResult,
 )
@@ -30,7 +32,15 @@ class FakeRetrievalService:
             warnings=[],
         )
 
-    def retrieve_schema_context(self, question: str, schema: DatabaseSchema) -> RetrievedSchemaContext:
+    def retrieve_schema_context(
+        self,
+        question: str,
+        schema: DatabaseSchema,
+        plan: QueryPlan | None = None,
+        max_tables: int = 5,
+        max_columns_per_table: int = 8,
+        broaden: bool = False,
+    ) -> RetrievedSchemaContext:
         self.last_question = question
         return self.context
 
@@ -55,6 +65,7 @@ class FakeSQLGenerationService:
         question: str,
         schema_context: RetrievedSchemaContext,
         conversation_context=None,
+        plan: QueryPlan | None = None,
     ) -> SQLGenerationResult:
         self.generate_calls += 1
         self.last_conversation_context = conversation_context
@@ -67,6 +78,7 @@ class FakeSQLGenerationService:
         previous_sql: str,
         failure_message: str,
         conversation_context=None,
+        plan: QueryPlan | None = None,
     ) -> SQLGenerationResult:
         self.repair_calls += 1
         self.last_conversation_context = conversation_context
@@ -78,6 +90,7 @@ class FakeSQLGenerationService:
         schema_context: RetrievedSchemaContext,
         generated_sql: str,
         conversation_context=None,
+        plan: QueryPlan | None = None,
     ) -> SQLSemanticReviewResult:
         self.review_calls += 1
         self.last_conversation_context = conversation_context
@@ -131,6 +144,8 @@ class FakeResponseFormatterService:
         used_tables: list[str],
         warnings: list[str] | None = None,
         repaired: bool = False,
+        plan: QueryPlan | None = None,
+        trace: QueryTrace | None = None,
     ) -> QueryResponse:
         return QueryResponse(
             question=question,
@@ -143,6 +158,8 @@ class FakeResponseFormatterService:
             warnings=warnings or [],
             used_tables=used_tables,
             repaired=repaired,
+            plan=plan,
+            trace=trace,
         )
 
 
@@ -165,6 +182,8 @@ def test_query_pipeline_repairs_once_after_validation_failure(sample_schema) -> 
     assert generation_service.repair_calls == 1
     assert "repaired once after a validation failure" in " ".join(response.warnings).lower()
     assert response.generated_sql.endswith("LIMIT 200")
+    assert response.plan is not None
+    assert response.trace is not None
 
 
 def test_query_pipeline_rejects_hard_safety_failure(sample_schema) -> None:
@@ -204,6 +223,7 @@ def test_query_pipeline_canonicalizes_used_tables(sample_schema) -> None:
             question: str,
             schema_context: RetrievedSchemaContext,
             conversation_context=None,
+            plan: QueryPlan | None = None,
         ) -> SQLGenerationResult:
             return SQLGenerationResult(
                 sql="SELECT customer_id, amount FROM payment",
@@ -292,6 +312,7 @@ def test_query_pipeline_rewrites_once_after_semantic_review(sample_schema) -> No
             schema_context: RetrievedSchemaContext,
             generated_sql: str,
             conversation_context=None,
+            plan: QueryPlan | None = None,
         ) -> SQLSemanticReviewResult:
             self.review_calls += 1
             return SQLSemanticReviewResult(
@@ -327,3 +348,95 @@ def test_query_pipeline_rewrites_once_after_semantic_review(sample_schema) -> No
     assert generation_service.review_calls == 1
     assert generation_service.repair_calls == 1
     assert any("semantic review" in warning.lower() for warning in response.warnings)
+
+
+def test_query_pipeline_retries_once_with_broader_retrieval_after_no_rows(sample_schema) -> None:
+    class RetryAwareRetrievalService(FakeRetrievalService):
+        def __init__(self) -> None:
+            super().__init__()
+            self.broaden_calls: list[bool] = []
+
+        def retrieve_schema_context(
+            self,
+            question: str,
+            schema: DatabaseSchema,
+            plan: QueryPlan | None = None,
+            max_tables: int = 5,
+            max_columns_per_table: int = 8,
+            broaden: bool = False,
+        ) -> RetrievedSchemaContext:
+            self.broaden_calls.append(broaden)
+            return self.context
+
+    class ValidSQLGenerationService(FakeSQLGenerationService):
+        def generate_sql(
+            self,
+            question: str,
+            schema_context: RetrievedSchemaContext,
+            conversation_context=None,
+            plan: QueryPlan | None = None,
+        ) -> SQLGenerationResult:
+            self.generate_calls += 1
+            return SQLGenerationResult(
+                sql="SELECT customer_id, amount FROM payment",
+                used_tables=["public.payment"],
+                notes=[],
+            )
+
+    class ValidatingSQLValidationService:
+        def validate_sql(self, sql: str) -> SQLValidationResult:
+            return SQLValidationResult(
+                original_sql=sql,
+                validated_sql=sql,
+                is_valid=True,
+                can_repair=False,
+                classification="valid",
+                warnings=[],
+                detected_tables=["payment"],
+            )
+
+    class NoRowsThenRowsExecutionService:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def execute_sql(self, validated_sql: str) -> SQLExecutionResult:
+            self.calls += 1
+            if self.calls == 1:
+                return SQLExecutionResult(
+                    sql=validated_sql,
+                    success=True,
+                    columns=["customer_id", "amount"],
+                    rows=[],
+                    row_count=0,
+                    warnings=[],
+                )
+            return SQLExecutionResult(
+                sql=validated_sql,
+                success=True,
+                columns=["customer_id", "amount"],
+                rows=[[1, 10.0]],
+                row_count=1,
+                warnings=[],
+            )
+
+    retrieval_service = RetryAwareRetrievalService()
+    pipeline_service = QueryPipelineService(
+        retrieval_service=retrieval_service,
+        sql_generation_service=ValidSQLGenerationService(),
+        sql_validation_service=ValidatingSQLValidationService(),
+        sql_execution_service=NoRowsThenRowsExecutionService(),
+        response_formatter_service=FakeResponseFormatterService(),
+    )
+
+    response = pipeline_service.run_query(
+        "Now show only the top 5",
+        sample_schema,
+        conversation_context=[
+            ConversationMessage(role="user", content="Which customers spent the most in total?"),
+            ConversationMessage(role="assistant", content="MARION led the ranking."),
+        ],
+    )
+
+    assert retrieval_service.broaden_calls == [False, True]
+    assert response.row_count == 1
+    assert any("broader schema focus" in warning.lower() for warning in response.warnings)

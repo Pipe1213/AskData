@@ -169,6 +169,7 @@ function SuccessReply({
   const shouldShowChart =
     canRenderChart(queryResult.chart_recommendation) && queryResult.rows.length > 0;
   const isNoResult = queryResult.row_count === 0;
+  const trace = queryResult.trace;
 
   return (
     <AssistantFrame>
@@ -204,6 +205,63 @@ function SuccessReply({
             </button>
           </div>
         </div>
+
+        {trace ? (
+          <details className="details-card" open={trace.retries.length > 0}>
+            <summary>
+              <span>How AskData approached this</span>
+              <span className="chip">{trace.confidence} confidence</span>
+            </summary>
+            <div className="details-body space-y-4">
+              <p className="text-sm leading-7 text-muted md:text-base">
+                {trace.interpreted_goal}
+              </p>
+              {trace.schema_focus.length > 0 ? (
+                <div className="space-y-2">
+                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted">
+                    Schema focus
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    {trace.schema_focus.map((focus) => (
+                      <span key={focus} className="chip">
+                        {focus}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+              {trace.retries.length > 0 ? (
+                <div className="space-y-2">
+                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted">
+                    Retries
+                  </p>
+                  <div className="space-y-2">
+                    {trace.retries.map((retry, index) => (
+                      <p key={`${retry}-${index}`} className="text-sm leading-7 text-muted">
+                        {retry}
+                      </p>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+              <div className="space-y-2">
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted">
+                  Trace
+                </p>
+                <div className="space-y-3">
+                  {trace.stages.map((step, index) => (
+                    <div key={`${step.stage}-${index}`} className="space-y-1">
+                      <p className="text-sm font-semibold text-ink">{step.label}</p>
+                      {step.detail ? (
+                        <p className="text-sm leading-7 text-muted">{step.detail}</p>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </details>
+        ) : null}
 
         {isNoResult ? (
           <div className="rounded-[24px] border border-line bg-white/72 px-5 py-5">
