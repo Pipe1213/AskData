@@ -17,6 +17,12 @@ CATEGORY_TOKENS = {"category", "genre"}
 CUSTOMER_TOKENS = {"customer", "customers"}
 STAFF_TOKENS = {"staff", "employee", "employees"}
 RENTAL_TOKENS = {"rental", "rentals", "rented", "rent"}
+PRODUCT_TOKENS = {"product", "products", "item", "items", "sku"}
+BRAND_TOKENS = {"brand", "brands"}
+REGION_TOKENS = {"region", "regions", "market", "markets", "country", "countries"}
+ORDER_TOKENS = {"order", "orders", "ordered", "purchase", "purchases"}
+RETURN_TOKENS = {"return", "returns", "refund", "refunds"}
+SHIPMENT_TOKENS = {"shipment", "shipments", "delivery", "deliveries", "carrier"}
 TIME_TOKENS = {"date", "dates", "trend", "monthly", "month", "daily", "yearly", "time", "year", "day"}
 COUNT_TOKENS = {"count", "counts", "number", "many"}
 AVERAGE_TOKENS = {"average", "avg", "mean"}
@@ -30,6 +36,13 @@ SEMANTIC_TABLE_HINTS: dict[str, set[str]] = {
     "rental": RENTAL_TOKENS | TIME_TOKENS,
     "inventory": {"inventory", "stock"} | CATEGORY_TOKENS,
     "category": CATEGORY_TOKENS,
+    "order": ORDER_TOKENS | REVENUE_TOKENS | TIME_TOKENS,
+    "product": PRODUCT_TOKENS | CATEGORY_TOKENS | BRAND_TOKENS,
+    "brand": BRAND_TOKENS,
+    "region": REGION_TOKENS,
+    "shipment": SHIPMENT_TOKENS | TIME_TOKENS,
+    "return": RETURN_TOKENS,
+    "sales_rep": STAFF_TOKENS | {"rep", "representative", "seller"},
 }
 
 SEMANTIC_COLUMN_HINTS: dict[str, set[str]] = {
@@ -39,6 +52,18 @@ SEMANTIC_COLUMN_HINTS: dict[str, set[str]] = {
     "customer_id": CUSTOMER_TOKENS,
     "staff_id": STAFF_TOKENS,
     "name": CATEGORY_TOKENS | {"customer", "staff"},
+    "full_name": CUSTOMER_TOKENS | STAFF_TOKENS,
+    "category_name": CATEGORY_TOKENS,
+    "brand_name": BRAND_TOKENS,
+    "region_name": REGION_TOKENS,
+    "ordered_at": TIME_TOKENS | ORDER_TOKENS,
+    "paid_at": TIME_TOKENS | REVENUE_TOKENS,
+    "requested_at": TIME_TOKENS | RETURN_TOKENS,
+    "shipped_at": TIME_TOKENS | SHIPMENT_TOKENS,
+    "refund_amount": RETURN_TOKENS,
+    "shipping_cost": SHIPMENT_TOKENS,
+    "order_status": ORDER_TOKENS,
+    "order_channel": ORDER_TOKENS,
 }
 
 
@@ -554,7 +579,7 @@ class RetrievalService:
                     preferred.append(column_name)
 
         if question_tokens & TIME_TOKENS:
-            for column_name in ("payment_date", "rental_date", "last_update"):
+            for column_name in ("payment_date", "paid_at", "ordered_at", "rental_date", "shipped_at", "requested_at", "last_update"):
                 if column_name in available_names and column_name not in preferred:
                     preferred.append(column_name)
 
@@ -564,12 +589,42 @@ class RetrievalService:
                     preferred.append(column_name)
 
         if question_tokens & STAFF_TOKENS:
-            for column_name in ("staff_id", "first_name", "last_name"):
+            for column_name in ("staff_id", "sales_rep_id", "full_name", "first_name", "last_name"):
                 if column_name in available_names and column_name not in preferred:
                     preferred.append(column_name)
 
         if question_tokens & CATEGORY_TOKENS:
-            for column_name in ("name", "category_id"):
+            for column_name in ("category_name", "name", "category_id"):
+                if column_name in available_names and column_name not in preferred:
+                    preferred.append(column_name)
+
+        if question_tokens & PRODUCT_TOKENS:
+            for column_name in ("product_name", "product_id", "sku"):
+                if column_name in available_names and column_name not in preferred:
+                    preferred.append(column_name)
+
+        if question_tokens & BRAND_TOKENS:
+            for column_name in ("brand_name", "brand_id"):
+                if column_name in available_names and column_name not in preferred:
+                    preferred.append(column_name)
+
+        if question_tokens & REGION_TOKENS:
+            for column_name in ("region_name", "region_id"):
+                if column_name in available_names and column_name not in preferred:
+                    preferred.append(column_name)
+
+        if question_tokens & RETURN_TOKENS:
+            for column_name in ("refund_amount", "return_status", "return_reason"):
+                if column_name in available_names and column_name not in preferred:
+                    preferred.append(column_name)
+
+        if question_tokens & SHIPMENT_TOKENS:
+            for column_name in ("shipment_status", "carrier", "shipping_cost"):
+                if column_name in available_names and column_name not in preferred:
+                    preferred.append(column_name)
+
+        if question_tokens & ORDER_TOKENS:
+            for column_name in ("order_id", "order_status", "order_channel"):
                 if column_name in available_names and column_name not in preferred:
                     preferred.append(column_name)
 
@@ -612,7 +667,7 @@ class RetrievalService:
 
         time_hints = []
         if question_tokens & TIME_TOKENS:
-            time_hints.extend(["payment_date", "rental_date"])
+            time_hints.extend(["payment_date", "paid_at", "ordered_at", "rental_date", "shipped_at", "requested_at"])
 
         table_family_hints = list(
             dict.fromkeys(
@@ -634,5 +689,9 @@ class RetrievalService:
         if normalized_name.startswith("payment_p"):
             return "payment"
         if normalized_name.endswith("_list"):
-            return normalized_name[: -len("_list")]
+            normalized_name = normalized_name[: -len("_list")]
+        if normalized_name.endswith("ies") and len(normalized_name) > 3:
+            return normalized_name[:-3] + "y"
+        if normalized_name.endswith("s") and not normalized_name.endswith("ss"):
+            return normalized_name[:-1]
         return normalized_name

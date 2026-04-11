@@ -1,0 +1,91 @@
+[
+  {
+    "dataset": "pagila",
+    "category": "ranking",
+    "question": "Which 10 customers spent the most in total?",
+    "expected_task_type": "ranking",
+    "expected_primary_artifact": "table",
+    "expected_used_tables": ["public.customer", "public.payment"]
+  },
+  {
+    "dataset": "pagila",
+    "category": "ranking",
+    "question": "What are the top 10 film categories by total revenue?",
+    "expected_task_type": "ranking",
+    "expected_primary_artifact": "table",
+    "expected_used_tables": ["public.payment", "public.rental", "public.inventory", "public.film_category", "public.category"]
+  },
+  {
+    "dataset": "pagila",
+    "category": "aggregation",
+    "question": "How much revenue did each staff member process?",
+    "expected_task_type": "aggregation",
+    "expected_primary_artifact": "table",
+    "expected_used_tables": ["public.payment", "public.staff"]
+  },
+  {
+    "dataset": "pagila",
+    "category": "trend",
+    "question": "How many rentals happened each month?",
+    "expected_task_type": "trend",
+    "expected_primary_artifact": "chart",
+    "expected_used_tables": ["public.rental"]
+  },
+  {
+    "dataset": "pagila",
+    "category": "trend",
+    "question": "What is the monthly trend of rentals this year?",
+    "expected_task_type": "trend",
+    "expected_primary_artifact": "chart",
+    "expected_used_tables": ["public.rental"]
+  },
+  {
+    "dataset": "pagila",
+    "category": "schema_lookup",
+    "question": "Which tables contain payment information?",
+    "expected_task_type": "schema_lookup",
+    "expected_primary_artifact": "summary",
+    "expected_used_tables": []
+  },
+  {
+    "dataset": "pagila",
+    "category": "comparison",
+    "question": "Compare average rental duration by film category.",
+    "expected_task_type": "comparison",
+    "expected_primary_artifact": "chart",
+    "expected_used_tables": ["public.film", "public.film_category", "public.category"]
+  },
+  {
+    "dataset": "pagila",
+    "category": "follow_up",
+    "question": "Now show only the top 5",
+    "conversation_context": [
+      {"role": "user", "content": "Which 10 customers spent the most in total?"},
+      {"role": "assistant", "content": "The top customers by total payment amount were returned in descending order."}
+    ],
+    "expected_task_type": "follow_up_refinement",
+    "expected_primary_artifact": "table",
+    "expected_used_tables": ["public.customer", "public.payment"]
+  },
+  {
+    "dataset": "pagila",
+    "category": "follow_up",
+    "question": "Group this by month",
+    "conversation_context": [
+      {"role": "user", "content": "How much revenue did each staff member process?"},
+      {"role": "assistant", "content": "The answer reported revenue totals per staff member."}
+    ],
+    "expected_task_type": "follow_up_refinement",
+    "expected_primary_artifact": "chart",
+    "expected_used_tables": ["public.payment", "public.staff"]
+  },
+  {
+    "dataset": "pagila",
+    "category": "no_result",
+    "question": "Show rentals from the year 1990.",
+    "expected_task_type": "trend",
+    "expected_primary_artifact": "summary",
+    "expected_used_tables": ["public.rental"],
+    "allow_no_rows": true
+  }
+]

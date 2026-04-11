@@ -116,5 +116,9 @@ def _canonical_table_family(table_name: str) -> str:
     if normalized_name.startswith("payment_p"):
         return "payment"
     if normalized_name.endswith("_list"):
-        return normalized_name[: -len("_list")]
+        normalized_name = normalized_name[: -len("_list")]
+    if normalized_name.endswith("ies") and len(normalized_name) > 3:
+        return normalized_name[:-3] + "y"
+    if normalized_name.endswith("s") and not normalized_name.endswith("ss"):
+        return normalized_name[:-1]
     return normalized_name

@@ -242,14 +242,23 @@ class ResponseFormatterService:
     ) -> ChartRecommendation:
         columns = execution_result.columns
         rows = execution_result.rows
+        question_tokens = significant_tokens(question)
 
         if len(columns) < 2 or not rows:
             return ChartRecommendation(type="table_only")
 
-        if len(rows) < 2 or len(rows) > 24:
+        if len(rows) < 2:
             return ChartRecommendation(type="table_only")
 
-        x_index = self._find_label_column_index(columns, rows[0])
+        if len(rows) > 24 and not question_tokens & {"trend", "compare", "comparison", "monthly", "month", "yearly", "year"}:
+            return ChartRecommendation(type="table_only")
+
+        if len(rows) > 120:
+            return ChartRecommendation(type="table_only")
+
+        x_index = self._find_time_column_index(columns) if question_tokens & {"trend", "monthly", "month", "yearly", "year"} else None
+        if x_index is None:
+            x_index = self._find_label_column_index(columns, rows[0])
         if x_index is None:
             x_index = 0
 
@@ -314,6 +323,10 @@ class ResponseFormatterService:
         columns: list[str],
         first_row: list[object],
     ) -> int | None:
+        time_index = self._find_time_column_index(columns)
+        if time_index is not None:
+            return time_index
+
         for index, value in enumerate(first_row):
             if isinstance(value, str) and value.strip():
                 return index
@@ -323,6 +336,32 @@ class ResponseFormatterService:
                 return index
 
         return None
+
+    def _find_time_column_index(self, columns: list[str]) -> int | None:
+        best_index: int | None = None
+        best_score = float("-inf")
+        for index, column_name in enumerate(columns):
+            if not self._looks_like_time_column(column_name):
+                continue
+
+            normalized = column_name.lower()
+            score = 0.0
+            if "month" in normalized:
+                score += 5.0
+            if "date" in normalized or normalized.endswith("_at"):
+                score += 4.0
+            if "day" in normalized:
+                score += 3.0
+            if "quarter" in normalized:
+                score += 2.5
+            if "year" in normalized:
+                score += 1.0
+
+            if score > best_score:
+                best_score = score
+                best_index = index
+
+        return best_index
 
     def _looks_like_time_column(self, column_name: str) -> bool:
         normalized_name = column_name.lower()
@@ -382,19 +421,30 @@ class ResponseFormatterService:
             and execution_result.row_count > 0
             and len(execution_result.rows) > 1
         )
+        if plan is not None and plan.task_type == "schema_lookup":
+            return "summary"
         wants_table = bool(
             question_tokens
-            & {"table", "list", "rows", "top", "show", "which", "customer", "customers", "category", "categories"}
+            & {"table", "list", "rows", "top", "show", "which", "customer", "customers", "category", "categories", "brand", "brands", "sales", "staff", "employee", "employees"}
         )
         wants_chart = bool(
             question_tokens
-            & {"trend", "compare", "comparison", "monthly", "month", "yearly", "chart", "plot", "graph"}
+            & {"trend", "compare", "comparison", "monthly", "month", "yearly", "chart", "plot", "graph", "group"}
         )
 
         if plan is not None and plan.task_type == "trend" and chart_possible:
             return "chart"
         if plan is not None and plan.task_type == "comparison" and chart_possible:
-            return "chart_and_table"
+            return "chart"
+        if plan is not None and plan.task_type == "ranking":
+            return "table"
+        if plan is not None and plan.task_type == "follow_up_refinement":
+            if chart_possible and wants_chart:
+                return "chart"
+            if wants_table:
+                return "table"
+        if chart_possible and self._find_time_column_index(execution_result.columns) is not None:
+            return "chart"
         if wants_table and chart_possible and wants_chart:
             return "chart_and_table"
         if wants_table:

@@ -4,6 +4,7 @@ from fastapi.responses import JSONResponse
 from app.api.client_tokens import get_optional_client_token
 from app.core.exceptions import QueryPipelineError
 from app.schemas.query import DebugPayload, ErrorPayload, QueryErrorResponse, QueryRequest, QueryResponse
+from app.services.dataset_adapters import resolve_dataset_adapter
 from app.services.query_pipeline_service import QueryPipelineService
 from app.services.session_service import SessionService
 
@@ -20,6 +21,14 @@ def run_query(
     session_service = _get_session_service(request)
     schema_cache = getattr(request.app.state, "schema_cache", None)
     debug_mode = bool(getattr(getattr(pipeline_service, "settings", None), "debug_mode", False))
+    try:
+        dataset_adapter_name = (
+            resolve_dataset_adapter(schema_cache).name
+            if schema_cache is not None
+            else None
+        )
+    except Exception:
+        dataset_adapter_name = None
     memory_context = (
         session_service.get_memory_context(
             client_token=client_token,
@@ -71,6 +80,7 @@ def run_query(
             debug=(
                 DebugPayload(
                     stage=exc.stage,
+                    dataset_adapter=dataset_adapter_name,
                     repair_attempted="repair" in " ".join(warnings).lower(),
                     inherited_turn_ids=(
                         memory_context.inherited_from_turn_ids

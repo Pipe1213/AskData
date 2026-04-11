@@ -14,6 +14,7 @@ def build_sql_generation_messages(
     dataset_hints: list[str] | None = None,
 ) -> list[dict[str, str]]:
     dataset_hint_section = _format_dataset_hints(dataset_hints)
+    relative_time_hint_section = _format_relative_time_hint(question)
     system_prompt = f"""
 You are an expert PostgreSQL analytics assistant.
 Generate a single read-only PostgreSQL query that answers the user's question.
@@ -30,6 +31,7 @@ Rules:
 - Do not invent columns or tables.
 - Return structured JSON matching the required schema.
 {dataset_hint_section}
+{relative_time_hint_section}
 """.strip()
 
     user_prompt = f"""
@@ -218,6 +220,7 @@ def build_sql_repair_messages(
     dataset_hints: list[str] | None = None,
 ) -> list[dict[str, str]]:
     dataset_hint_section = _format_dataset_hints(dataset_hints)
+    relative_time_hint_section = _format_relative_time_hint(question)
     system_prompt = f"""
 You are repairing a PostgreSQL analytics query.
 Produce one corrected read-only PostgreSQL query that answers the original question.
@@ -233,6 +236,7 @@ Rules:
 - Use PostgreSQL syntax only.
 - Return structured JSON matching the required schema.
 {dataset_hint_section}
+{relative_time_hint_section}
 """.strip()
 
     user_prompt = f"""
@@ -334,3 +338,23 @@ def _format_dataset_hints(dataset_hints: list[str] | None) -> str:
     base_hint = "- Use only the retrieved schema context. If the question cannot be answered safely from it, be conservative."
     hints = [base_hint, *(dataset_hints or [])]
     return "Dataset-specific hints:\n" + "\n".join(hints)
+
+
+def _format_relative_time_hint(question: str) -> str:
+    normalized_question = question.lower()
+    relative_phrases = (
+        "this year",
+        "this month",
+        "this quarter",
+        "current year",
+        "current month",
+        "current quarter",
+    )
+    if not any(phrase in normalized_question for phrase in relative_phrases):
+        return ""
+
+    return (
+        "Relative time hint:\n"
+        "- If the question uses a current-relative period like 'this year' or 'this month' and the dataset is historical, "
+        "prefer the latest available period in the data over the wall-clock current date when that is the only way to avoid an empty answer."
+    )

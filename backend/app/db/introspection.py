@@ -12,7 +12,7 @@ FROM pg_class AS cls
 JOIN pg_namespace AS ns
     ON ns.oid = cls.relnamespace
 WHERE cls.relkind = 'r'
-  AND ns.nspname NOT IN ('pg_catalog', 'information_schema')
+  AND ns.nspname NOT IN ('pg_catalog', 'information_schema', 'askdata_app')
 ORDER BY ns.nspname, cls.relname
 """
 
@@ -33,7 +33,7 @@ LEFT JOIN pg_catalog.pg_statio_all_tables AS st
 LEFT JOIN pg_catalog.pg_description AS pgd
     ON pgd.objoid = st.relid
    AND pgd.objsubid = cols.ordinal_position
-WHERE cols.table_schema NOT IN ('pg_catalog', 'information_schema')
+WHERE cols.table_schema NOT IN ('pg_catalog', 'information_schema', 'askdata_app')
 ORDER BY cols.table_schema, cols.table_name, cols.ordinal_position
 """
 
@@ -49,7 +49,7 @@ JOIN information_schema.key_column_usage AS kcu
    AND tc.table_schema = kcu.table_schema
    AND tc.table_name = kcu.table_name
 WHERE tc.constraint_type = 'PRIMARY KEY'
-  AND tc.table_schema NOT IN ('pg_catalog', 'information_schema')
+  AND tc.table_schema NOT IN ('pg_catalog', 'information_schema', 'askdata_app')
 ORDER BY tc.table_schema, tc.table_name, kcu.ordinal_position
 """
 
@@ -72,7 +72,7 @@ JOIN information_schema.constraint_column_usage AS ccu
     ON ccu.constraint_name = tc.constraint_name
    AND ccu.table_schema = tc.table_schema
 WHERE tc.constraint_type = 'FOREIGN KEY'
-  AND tc.table_schema NOT IN ('pg_catalog', 'information_schema')
+  AND tc.table_schema NOT IN ('pg_catalog', 'information_schema', 'askdata_app')
 ORDER BY tc.constraint_name, kcu.ordinal_position
 """
 

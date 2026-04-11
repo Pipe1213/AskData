@@ -456,3 +456,93 @@ def test_query_pipeline_retries_once_with_broader_retrieval_after_no_rows(sample
     assert retrieval_service.broaden_calls == [False, True]
     assert response.row_count == 1
     assert any("broader schema focus" in warning.lower() for warning in response.warnings)
+
+
+def test_query_pipeline_rewrites_after_relative_time_no_rows(sample_schema) -> None:
+    class StableRetrievalService(FakeRetrievalService):
+        pass
+
+    class RelativeTimeGenerationService(FakeSQLGenerationService):
+        def generate_sql(
+            self,
+            question: str,
+            schema_context: RetrievedSchemaContext,
+            conversation_context=None,
+            plan: QueryPlan | None = None,
+            memory_context=None,
+            dataset_hints=None,
+        ) -> SQLGenerationResult:
+            self.generate_calls += 1
+            return SQLGenerationResult(
+                sql="SELECT rental_month, rental_count FROM rental WHERE EXTRACT(YEAR FROM rental_date) = EXTRACT(YEAR FROM CURRENT_DATE)",
+                used_tables=["public.rental"],
+                notes=[],
+            )
+
+        def repair_sql(
+            self,
+            question: str,
+            schema_context: RetrievedSchemaContext,
+            previous_sql: str,
+            failure_message: str,
+            conversation_context=None,
+            plan: QueryPlan | None = None,
+            memory_context=None,
+            dataset_hints=None,
+        ) -> SQLGenerationResult:
+            self.repair_calls += 1
+            return SQLGenerationResult(
+                sql="SELECT rental_month, rental_count FROM rental WHERE EXTRACT(YEAR FROM rental_date) = 2022",
+                used_tables=["public.rental"],
+                notes=[],
+            )
+
+    class ValidatingSQLValidationService:
+        def validate_sql(self, sql: str) -> SQLValidationResult:
+            return SQLValidationResult(
+                original_sql=sql,
+                validated_sql=sql,
+                is_valid=True,
+                can_repair=False,
+                classification="valid",
+                warnings=[],
+                detected_tables=["rental"],
+            )
+
+    class NoRowsUntilRepairExecutionService:
+        def execute_sql(self, validated_sql: str) -> SQLExecutionResult:
+            if "2022" not in validated_sql:
+                return SQLExecutionResult(
+                    sql=validated_sql,
+                    success=True,
+                    columns=["rental_month", "rental_count"],
+                    rows=[],
+                    row_count=0,
+                    warnings=[],
+                )
+            return SQLExecutionResult(
+                sql=validated_sql,
+                success=True,
+                columns=["rental_month", "rental_count"],
+                rows=[["2022-01-01", 120], ["2022-02-01", 182]],
+                row_count=2,
+                warnings=[],
+            )
+
+    generation_service = RelativeTimeGenerationService()
+    pipeline_service = QueryPipelineService(
+        retrieval_service=StableRetrievalService(),
+        sql_generation_service=generation_service,
+        sql_validation_service=ValidatingSQLValidationService(),
+        sql_execution_service=NoRowsUntilRepairExecutionService(),
+        response_formatter_service=FakeResponseFormatterService(),
+    )
+
+    response = pipeline_service.run_query(
+        "What is the monthly trend of rentals this year?",
+        sample_schema,
+    )
+
+    assert generation_service.repair_calls >= 1
+    assert response.row_count == 2
+    assert any("relative time period" in warning.lower() for warning in response.warnings)

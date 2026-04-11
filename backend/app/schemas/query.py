@@ -24,6 +24,7 @@ class QueryPlan(BaseModel):
     time_targets: list[str] = Field(default_factory=list)
     candidate_table_families: list[str] = Field(default_factory=list)
     ambiguity_notes: list[str] = Field(default_factory=list)
+    retry_guidance: list[str] = Field(default_factory=list)
     confidence: Literal["low", "medium", "high"] = "medium"
     memory_summary: str | None = None
     inherited_from_turn_ids: list[str] = Field(default_factory=list)
@@ -103,6 +104,7 @@ class ChartRecommendation(BaseModel):
 
 class DebugPayload(BaseModel):
     stage: str | None = None
+    dataset_adapter: str | None = None
     retrieval_tables: list[str] = Field(default_factory=list)
     validation_classification: str | None = None
     detected_tables: list[str] = Field(default_factory=list)
@@ -110,7 +112,10 @@ class DebugPayload(BaseModel):
     planner_task_type: str | None = None
     planner_confidence: str | None = None
     planner_table_families: list[str] = Field(default_factory=list)
+    planner_retry_guidance: list[str] = Field(default_factory=list)
     retry_reasons: list[str] = Field(default_factory=list)
+    retry_classifications: list[str] = Field(default_factory=list)
+    recovery_actions: list[str] = Field(default_factory=list)
     inherited_turn_ids: list[str] = Field(default_factory=list)
 
 

@@ -1,0 +1,91 @@
+[
+  {
+    "dataset": "retail_ops",
+    "category": "ranking",
+    "question": "Which 10 customers generated the most revenue?",
+    "expected_task_type": "ranking",
+    "expected_primary_artifact": "table",
+    "expected_used_tables": ["public.customers", "public.orders", "public.payments"]
+  },
+  {
+    "dataset": "retail_ops",
+    "category": "ranking",
+    "question": "What are the top 5 product categories by revenue?",
+    "expected_task_type": "ranking",
+    "expected_primary_artifact": "table",
+    "expected_used_tables": ["public.categories", "public.products", "public.order_items", "public.payments"]
+  },
+  {
+    "dataset": "retail_ops",
+    "category": "trend",
+    "question": "How did monthly revenue change by sales channel?",
+    "expected_task_type": "trend",
+    "expected_primary_artifact": "chart",
+    "expected_used_tables": ["public.orders", "public.payments"]
+  },
+  {
+    "dataset": "retail_ops",
+    "category": "comparison",
+    "question": "Compare delivered order revenue by region.",
+    "expected_task_type": "comparison",
+    "expected_primary_artifact": "chart",
+    "expected_used_tables": ["public.orders", "public.stores", "public.regions", "public.payments"]
+  },
+  {
+    "dataset": "retail_ops",
+    "category": "returns",
+    "question": "Which brands have the highest return amount?",
+    "expected_task_type": "ranking",
+    "expected_primary_artifact": "table",
+    "expected_used_tables": ["public.return_requests", "public.order_items", "public.products", "public.brands"]
+  },
+  {
+    "dataset": "retail_ops",
+    "category": "operations",
+    "question": "Which sales reps handled the most delivered orders?",
+    "expected_task_type": "ranking",
+    "expected_primary_artifact": "table",
+    "expected_used_tables": ["public.sales_reps", "public.orders"]
+  },
+  {
+    "dataset": "retail_ops",
+    "category": "schema_lookup",
+    "question": "Which tables contain shipment information?",
+    "expected_task_type": "schema_lookup",
+    "expected_primary_artifact": "summary",
+    "expected_used_tables": []
+  },
+  {
+    "dataset": "retail_ops",
+    "category": "follow_up",
+    "question": "Now show only the top 5",
+    "conversation_context": [
+      {"role": "user", "content": "Which 10 customers generated the most revenue?"},
+      {"role": "assistant", "content": "AskData ranked customers by total revenue across the returned period."}
+    ],
+    "expected_task_type": "follow_up_refinement",
+    "expected_primary_artifact": "table",
+    "expected_used_tables": ["public.customers", "public.orders", "public.payments"]
+  },
+  {
+    "dataset": "retail_ops",
+    "category": "follow_up",
+    "question": "Group this by month",
+    "conversation_context": [
+      {"role": "user", "content": "Compare delivered order revenue by region."},
+      {"role": "assistant", "content": "The comparison showed stronger revenue in North America and Europe."}
+    ],
+    "expected_task_type": "follow_up_refinement",
+    "expected_primary_artifact": "chart",
+    "expected_used_tables": ["public.orders", "public.stores", "public.regions", "public.payments"]
+  },
+  {
+    "dataset": "retail_ops",
+    "category": "no_result",
+    "question": "Show orders from the year 2019.",
+    "expected_task_type": "trend",
+    "expected_primary_artifact": "summary",
+    "expected_used_tables": ["public.orders"],
+    "allow_no_rows": true
+  }
+]

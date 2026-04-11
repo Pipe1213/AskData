@@ -80,3 +80,30 @@ def test_planner_inherits_memory_for_follow_up_refinement() -> None:
     assert "customer" in plan.dimension_targets
     assert "payment" in plan.candidate_table_families
     assert plan.inherited_from_turn_ids == ["turn-1"]
+
+
+def test_planner_marks_time_shift_follow_up_without_inheriting_old_dimension() -> None:
+    service = PlannerService()
+
+    memory_context = MemoryContext(
+        memory_summary="Previous result ranked customers by total revenue.",
+        suggested_metric_targets=["amount", "revenue"],
+        suggested_dimension_targets=["customer", "customer_id"],
+        suggested_time_targets=["paid_at", "month"],
+        suggested_table_families=["payment", "customer", "order"],
+        inherited_from_turn_ids=["turn-2"],
+    )
+
+    plan = service.build_plan(
+        "Group this by month",
+        conversation_context=[
+            ConversationMessage(role="user", content="Which customers generated the most revenue?"),
+            ConversationMessage(role="assistant", content="Customer 24 led the ranking."),
+        ],
+        memory_context=memory_context,
+    )
+
+    assert plan.task_type == "follow_up_refinement"
+    assert "amount" in plan.metric_targets
+    assert "month" in plan.time_targets
+    assert plan.retry_guidance

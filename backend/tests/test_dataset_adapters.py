@@ -23,3 +23,18 @@ def test_resolve_dataset_adapter_returns_pagila_for_pagila_like_schema() -> None
     adapter = resolve_dataset_adapter(schema)
 
     assert adapter.name == "pagila"
+
+
+def test_resolve_dataset_adapter_handles_plural_generic_tables() -> None:
+    schema = DatabaseSchema(
+        tables=[
+            TableMetadata(schema_name="public", table_name="customers", full_name="public.customers"),
+            TableMetadata(schema_name="public", table_name="orders", full_name="public.orders"),
+            TableMetadata(schema_name="public", table_name="payments", full_name="public.payments"),
+            TableMetadata(schema_name="public", table_name="shipments", full_name="public.shipments"),
+        ]
+    )
+
+    adapter = resolve_dataset_adapter(schema)
+
+    assert adapter.name == "generic_postgres"

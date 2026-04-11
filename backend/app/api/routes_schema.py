@@ -32,6 +32,38 @@ def get_schema_overview(request: Request) -> SchemaOverviewResponse:
     return _build_schema_overview_response(schema_cache)
 
 
+@router.post("/schema/reload")
+def reload_schema_cache(request: Request) -> dict[str, int | str]:
+    schema_service = getattr(request.app.state, "schema_service", None)
+    if schema_service is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "schema_unavailable",
+                "message": "Schema service is not available.",
+                "details": {"stage": "runtime"},
+            },
+        )
+
+    try:
+        schema_cache = schema_service.load_schema()
+    except Exception as exc:
+        request.app.state.schema_cache_error = str(exc)
+        request.app.state.schema_cache = None
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "schema_reload_failed",
+                "message": "Schema metadata could not be reloaded.",
+                "details": {"stage": "runtime", "error": str(exc)},
+            },
+        ) from exc
+
+    request.app.state.schema_cache = schema_cache
+    request.app.state.schema_cache_error = None
+    return {"status": "ok", "table_count": len(schema_cache.tables)}
+
+
 def _build_schema_overview_response(
     schema: DatabaseSchema,
 ) -> SchemaOverviewResponse:

@@ -2,7 +2,7 @@
 
 AskData is a web app for asking questions about a PostgreSQL database in plain language.
 
-You type a business question, the backend turns it into SQL, checks that the SQL is safe, runs it against PostgreSQL, and returns:
+You type a business question, the backend plans how to answer it, turns it into SQL, checks that the SQL is safe, runs it against PostgreSQL, and returns:
 
 - a short answer
 - the SQL it used
@@ -10,7 +10,7 @@ You type a business question, the backend turns it into SQL, checks that the SQL
 - a simple chart when it makes sense
 - the tables involved
 
-This project is still at the MVP stage, but it already works end to end and is designed to be easy to run locally.
+The project is beyond the first MVP. It now has persistent local sessions, a planner-led pipeline, a compact trust trace, and a generic PostgreSQL core that can run against more than one included dataset.
 
 ## What the product looks like
 
@@ -32,16 +32,17 @@ The product has three main parts:
 
 - a `Next.js` frontend
 - a `FastAPI` backend
-- a `PostgreSQL` database loaded with the Pagila sample dataset
+- a `PostgreSQL` database loaded with one active demo dataset at a time
 
 At a high level, the request flow is:
 
 1. the user asks a question in the chat UI
-2. the backend finds the most relevant schema context
-3. the backend asks the model for SQL
-4. the SQL is validated with read-only rules
-5. the SQL is executed against PostgreSQL
-6. the backend formats the result for the UI
+2. the backend builds a small plan for the request
+3. the backend finds the most relevant schema context
+4. the backend asks the model for SQL
+5. the SQL is validated with read-only rules
+6. the SQL is executed against PostgreSQL
+7. the backend formats the result for the UI and stores the turn in local session history
 
 ## Architecture
 
@@ -53,23 +54,26 @@ The editable diagram source is included here:
 
 ## Current scope
 
-The current MVP includes:
+The current version includes:
 
 - PostgreSQL only
-- Pagila as the working dataset
+- two included demo datasets:
+  - `pagila`
+  - `retail_ops`
 - natural-language question input
 - schema overview
 - schema-aware retrieval
-- SQL generation with an LLM
+- planner-guided SQL generation with an LLM
 - parser-based SQL validation
 - read-only execution with timeout and row limits
-- a conversation-style UI with session-local follow-up context
+- a conversation-style UI with browser-scoped persistent session history
+- bounded retries and a compact trust trace
+- a generic PostgreSQL core with dataset adapters
 
-The current MVP does **not** include:
+The current version does **not** include:
 
 - user-provided databases
 - authentication
-- persistent chat history
 - multi-database support
 - dashboard building
 
@@ -94,7 +98,7 @@ The current MVP does **not** include:
 
 - `PostgreSQL`
 - `Docker Compose`
-- `Pagila`
+- included demo datasets under `demo_data/seed/`
 
 ## Repo structure
 
@@ -143,15 +147,30 @@ You need:
 make docker-up
 ```
 
-This starts PostgreSQL and loads Pagila from:
-
-- `demo_data/seed/pagila.sql`
+This starts PostgreSQL with the default demo database.
 
 The local database is exposed on:
 
 - `localhost:55432`
 
-### 2. Create local env files
+### 2. Choose the active demo dataset
+
+By default, AskData starts on `pagila`.
+
+To switch datasets later without changing the backend connection string:
+
+```bash
+make load-dataset DATASET=retail_ops
+```
+
+Available dataset names:
+
+- `pagila`
+- `retail_ops`
+
+This reloads the `public` schema only and keeps AskData's internal `askdata_app` persistence schema intact.
+
+### 3. Create local env files
 
 Backend:
 
@@ -167,7 +186,7 @@ Frontend:
 cp frontend/.env.example frontend/.env.local
 ```
 
-### 3. Install dependencies
+### 4. Install dependencies
 
 Backend:
 
@@ -181,7 +200,7 @@ Frontend:
 make frontend-install
 ```
 
-### 4. Start the app
+### 5. Start the app
 
 Backend:
 
@@ -222,15 +241,48 @@ curl http://127.0.0.1:8000/examples
 curl http://127.0.0.1:8000/schema/overview
 ```
 
+If you switch datasets while the backend is already running, the loader will try to refresh the schema cache automatically. If needed, you can also do it manually:
+
+```bash
+make reload-schema-cache
+```
+
+## Benchmarks
+
+Run the benchmark for the active or chosen dataset:
+
+```bash
+make benchmark-backend
+make benchmark-backend DATASET=retail_ops
+make benchmark-backend DATASET=pagila
+make benchmark-dual
+```
+
+The benchmark runner checks:
+
+- operational success
+- no-row outcomes
+- task type and primary artifact expectations
+- rough table-usage alignment
+
+`make benchmark-backend DATASET=...` now reloads the requested dataset first, so the benchmark always runs against the matching live schema.
+
 ## Example questions
 
-Try these in the chat UI:
+Try these in the chat UI on `pagila`:
 
 - `Which 10 customers spent the most in total?`
 - `What are the top 10 film categories by total revenue?`
 - `How much revenue did each staff member process?`
 - `How many rentals happened each month?`
 - `Now show only the top 5`
+
+Try these on `retail_ops`:
+
+- `Which 10 customers generated the most revenue?`
+- `What were the top product categories by revenue last quarter?`
+- `How did monthly revenue change by sales channel?`
+- `Which brands have the highest return amount?`
 
 ## Safety rules
 
@@ -247,17 +299,27 @@ The backend currently enforces:
 
 ## Current limitations
 
-- answer quality is good for many common questions, but not perfect
-- follow-up support is lightweight
-- conversation history only lives in the current browser session
-- chart selection is heuristic
-- Pagila quirks can appear in user-facing answers
+- answer quality is solid for many common questions, but not guaranteed on every business question
+- the generic PostgreSQL path is real, but it has only been validated on the two included datasets so far
+- bounded retries improve recovery, but this is not an open-ended agent
+- chart selection and primary artifact choice are still heuristic
+- deployment is still deferred
 
 ## Project status
 
-The project is currently in Phase 4: packaging and deployment preparation.
+AskData is currently in a strong local-demo V2 foundation state:
 
-Completed so far:
+- persistent local sessions
+- planner-led query pipeline
+- answer-first UI
+- generic PostgreSQL core plus dataset adapters
+- two included datasets for evaluation
+
+The next engineering focus is:
+
+- stronger generic-schema evaluation
+- better bounded recovery on hard questions and no-row cases
+- tighter follow-up behavior over longer analytical threads
 
 - backend MVP
 - frontend MVP

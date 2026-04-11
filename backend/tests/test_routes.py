@@ -34,6 +34,22 @@ def test_schema_overview_route_uses_cached_schema(client: TestClient, sample_sch
     assert payload["tables"][0]["columns"]
 
 
+def test_schema_reload_route_refreshes_schema_cache(client: TestClient, sample_schema) -> None:
+    class DummySchemaService:
+        def load_schema(self):
+            return sample_schema
+
+    client.app.state.schema_service = DummySchemaService()
+    client.app.state.schema_cache = None
+    client.app.state.schema_cache_error = "stale"
+
+    response = client.post("/schema/reload")
+
+    assert response.status_code == 200
+    assert response.json()["table_count"] == 2
+    assert client.app.state.schema_cache == sample_schema
+
+
 def test_query_route_returns_pipeline_success(client: TestClient) -> None:
     class DummyPipelineService:
         def run_query(self, question: str, schema, conversation_context=None, memory_context=None):

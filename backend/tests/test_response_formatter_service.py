@@ -207,3 +207,61 @@ def test_response_formatter_marks_trend_question_as_chart_primary() -> None:
     assert response.primary_artifact == "chart"
     assert "February 2022" in response.answer_summary
     assert "182" in response.answer_summary
+
+
+def test_response_formatter_prefers_time_column_for_trend_chart() -> None:
+    service = ResponseFormatterService(settings=SimpleNamespace(openai_api_key=None))
+    execution_result = SQLExecutionResult(
+        sql="SELECT order_channel, revenue_month, total_revenue FROM report",
+        success=True,
+        columns=["order_channel", "revenue_month", "total_revenue"],
+        rows=[
+            ["online", "2024-01-01", 1200],
+            ["store", "2024-02-01", 1480],
+            ["online", "2024-03-01", 1525],
+        ],
+        row_count=3,
+    )
+
+    response = service.format_query_response(
+        question="How did monthly revenue change by sales channel?",
+        generated_sql=execution_result.sql,
+        execution_result=execution_result,
+        used_tables=["public.orders", "public.payments"],
+        warnings=[],
+        plan=QueryPlan(
+            task_type="trend",
+            execution_strategy="single_query",
+            interpreted_goal="Summarize how the requested metric changes over time.",
+        ),
+    )
+
+    assert response.chart_recommendation.type == "line"
+    assert response.chart_recommendation.x == "revenue_month"
+    assert response.primary_artifact == "chart"
+
+
+def test_response_formatter_keeps_schema_lookup_on_summary() -> None:
+    service = ResponseFormatterService(settings=SimpleNamespace(openai_api_key=None))
+    execution_result = SQLExecutionResult(
+        sql="SELECT table_name FROM report",
+        success=True,
+        columns=["table_name"],
+        rows=[["shipment"], ["shipments"]],
+        row_count=2,
+    )
+
+    response = service.format_query_response(
+        question="Which tables contain shipment information?",
+        generated_sql=execution_result.sql,
+        execution_result=execution_result,
+        used_tables=["public.shipments"],
+        warnings=[],
+        plan=QueryPlan(
+            task_type="schema_lookup",
+            execution_strategy="schema_guided",
+            interpreted_goal="Identify the most relevant schema area before answering.",
+        ),
+    )
+
+    assert response.primary_artifact == "summary"

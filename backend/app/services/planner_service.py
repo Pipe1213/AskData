@@ -6,6 +6,12 @@ CATEGORY_TOKENS = {"category", "genre"}
 CUSTOMER_TOKENS = {"customer", "customers", "buyer", "buyers"}
 STAFF_TOKENS = {"staff", "employee", "employees"}
 RENTAL_TOKENS = {"rental", "rentals", "rented", "rent"}
+PRODUCT_TOKENS = {"product", "products", "item", "items", "sku"}
+BRAND_TOKENS = {"brand", "brands"}
+REGION_TOKENS = {"region", "regions", "market", "markets", "country", "countries"}
+ORDER_TOKENS = {"order", "orders", "ordered", "purchase", "purchases"}
+RETURN_TOKENS = {"return", "returns", "refund", "refunds"}
+SHIPMENT_TOKENS = {"shipment", "shipments", "delivery", "deliveries", "carrier"}
 TIME_TOKENS = {"date", "dates", "trend", "monthly", "month", "daily", "yearly", "time", "year", "day"}
 COUNT_TOKENS = {"count", "counts", "number", "many"}
 AVERAGE_TOKENS = {"average", "avg", "mean"}
@@ -54,6 +60,7 @@ class PlannerService:
         )
         ambiguity_notes = self._ambiguity_notes(task_type, question_tokens, metric_targets, dimension_targets)
         confidence = self._confidence(task_type, ambiguity_notes, question_tokens)
+        retry_guidance = self._retry_guidance(task_type, confidence, time_targets)
 
         return QueryPlan(
             task_type=task_type,
@@ -64,6 +71,7 @@ class PlannerService:
             time_targets=time_targets,
             candidate_table_families=candidate_table_families,
             ambiguity_notes=ambiguity_notes,
+            retry_guidance=retry_guidance,
             confidence=confidence,
             memory_summary=memory_summary,
             inherited_from_turn_ids=(
@@ -74,9 +82,7 @@ class PlannerService:
         )
 
     def should_retry_with_broader_retrieval(self, plan: QueryPlan) -> bool:
-        if plan.execution_strategy != "single_query":
-            return False
-        return plan.confidence != "high" or plan.task_type in {"follow_up_refinement", "comparison", "trend"}
+        return plan.execution_strategy == "single_query" and "broaden_retrieval" in plan.retry_guidance
 
     def _classify_task_type(
         self,
@@ -116,32 +122,57 @@ class PlannerService:
         if question_tokens & CUSTOMER_TOKENS:
             dimension_targets.extend(["customer", "customer_id", "first_name", "last_name"])
         if question_tokens & STAFF_TOKENS:
-            dimension_targets.extend(["staff", "staff_id", "first_name", "last_name"])
+            dimension_targets.extend(["staff", "employee", "sales_rep", "staff_id", "sales_rep_id", "first_name", "last_name", "full_name"])
         if question_tokens & CATEGORY_TOKENS:
-            dimension_targets.extend(["category", "name", "category_id"])
+            dimension_targets.extend(["category", "category_name", "name", "category_id"])
+        if question_tokens & PRODUCT_TOKENS:
+            dimension_targets.extend(["product", "product_name", "product_id", "sku"])
+        if question_tokens & BRAND_TOKENS:
+            dimension_targets.extend(["brand", "brand_name", "brand_id"])
+        if question_tokens & REGION_TOKENS:
+            dimension_targets.extend(["region", "region_name", "region_id"])
         if question_tokens & RENTAL_TOKENS:
             dimension_targets.extend(["rental", "inventory", "film"])
+        if question_tokens & ORDER_TOKENS:
+            dimension_targets.extend(["order", "order_id", "order_status", "order_channel"])
+        if question_tokens & RETURN_TOKENS:
+            dimension_targets.extend(["return", "return_status", "return_reason"])
+        if question_tokens & SHIPMENT_TOKENS:
+            dimension_targets.extend(["shipment", "carrier", "shipment_status"])
         return list(dict.fromkeys(dimension_targets))
 
     def _time_targets(self, question_tokens: set[str]) -> list[str]:
         if not question_tokens & TIME_TOKENS:
             return []
-        return ["payment_date", "rental_date", "month", "year"]
+        return ["payment_date", "paid_at", "rental_date", "ordered_at", "shipped_at", "requested_at", "month", "year"]
 
     def _candidate_table_families(self, question_tokens: set[str]) -> list[str]:
         families: list[str] = []
         if question_tokens & REVENUE_TOKENS:
             families.append("payment")
+            families.append("order")
         if question_tokens & CUSTOMER_TOKENS:
             families.append("customer")
         if question_tokens & STAFF_TOKENS:
-            families.append("staff")
+            families.append("sales_rep")
         if question_tokens & RENTAL_TOKENS:
             families.append("rental")
         if question_tokens & CATEGORY_TOKENS:
             families.append("category")
+        if question_tokens & PRODUCT_TOKENS:
+            families.append("product")
+        if question_tokens & BRAND_TOKENS:
+            families.append("brand")
+        if question_tokens & REGION_TOKENS:
+            families.append("region")
+        if question_tokens & ORDER_TOKENS:
+            families.append("order")
+        if question_tokens & RETURN_TOKENS:
+            families.append("return")
+        if question_tokens & SHIPMENT_TOKENS:
+            families.append("shipment")
         if question_tokens & TIME_TOKENS and "rental" not in families:
-            families.append("rental")
+            families.append("payment" if question_tokens & REVENUE_TOKENS else "order")
         return list(dict.fromkeys(families))
 
     def _ambiguity_notes(
@@ -171,6 +202,21 @@ class PlannerService:
         if task_type in {"follow_up_refinement", "comparison", "trend"} or len(question_tokens) <= 4:
             return "medium"
         return "high"
+
+    def _retry_guidance(
+        self,
+        task_type: str,
+        confidence: str,
+        time_targets: list[str],
+    ) -> list[str]:
+        guidance: list[str] = []
+        if task_type != "schema_lookup" and (confidence != "high" or task_type in {"follow_up_refinement", "comparison", "trend"}):
+            guidance.append("broaden_retrieval")
+        if task_type in {"follow_up_refinement", "comparison", "trend"}:
+            guidance.append("semantic_rewrite")
+        if task_type == "follow_up_refinement" or (task_type != "schema_lookup" and time_targets):
+            guidance.append("retry_no_rows_with_broader_focus")
+        return guidance
 
     def _interpreted_goal(self, question: str, task_type: str) -> str:
         if task_type == "schema_lookup":
@@ -206,11 +252,14 @@ class PlannerService:
         if not should_inherit:
             return metric_targets, dimension_targets, time_targets, candidate_table_families
 
+        explicit_dimension_shift = bool(question_tokens & (TIME_TOKENS | BRAND_TOKENS | REGION_TOKENS | CATEGORY_TOKENS | PRODUCT_TOKENS | STAFF_TOKENS | CUSTOMER_TOKENS))
+        explicit_time_shift = bool(question_tokens & TIME_TOKENS)
+
         if not metric_targets:
             metric_targets = list(memory_context.suggested_metric_targets)
-        if not dimension_targets:
+        if not dimension_targets and not explicit_time_shift:
             dimension_targets = list(memory_context.suggested_dimension_targets)
-        if not time_targets:
+        if not time_targets and not explicit_dimension_shift:
             time_targets = list(memory_context.suggested_time_targets)
         if not candidate_table_families:
             candidate_table_families = list(memory_context.suggested_table_families)

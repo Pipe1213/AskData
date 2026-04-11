@@ -1,0 +1,12 @@
+{
+  "examples": [
+    "Which 10 customers generated the most revenue?",
+    "What were the top product categories by revenue last quarter?",
+    "How did monthly revenue change by sales channel?",
+    "Which brands have the highest return amount?",
+    "Compare revenue by region.",
+    "Which sales reps handled the most delivered orders?",
+    "Now show only the top 5",
+    "Group this by month"
+  ]
+}

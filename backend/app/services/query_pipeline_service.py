@@ -84,6 +84,8 @@ class QueryPipelineService:
         )
         trace = self._new_trace(plan)
         retry_reasons: list[str] = []
+        retry_classifications: list[str] = []
+        recovery_actions: list[str] = []
         original_error: QueryPipelineError | None = None
 
         try:
@@ -104,6 +106,8 @@ class QueryPipelineService:
 
             retry_reason = "The first attempt failed, so AskData broadened the schema search and retried once."
             retry_reasons.append(retry_reason)
+            retry_classifications.append(self._classify_retry_from_error(exc))
+            recovery_actions.append("broaden_retrieval")
             trace.retries.append(retry_reason)
             trace.stages.append(
                 QueryTraceStep(
@@ -130,6 +134,8 @@ class QueryPipelineService:
         ):
             retry_reason = "The first query returned no rows, so AskData retried once with a broader schema focus."
             retry_reasons.append(retry_reason)
+            retry_classifications.append("plausible_overfiltered_no_rows")
+            recovery_actions.append("broaden_retrieval")
             trace.retries.append(retry_reason)
             trace.stages.append(
                 QueryTraceStep(
@@ -155,6 +161,42 @@ class QueryPipelineService:
                 if original_error is not None:
                     raise original_error
 
+        if self._should_retry_after_relative_time_no_rows(
+            question=normalized_question,
+            attempt=attempt,
+            recovery_actions=recovery_actions,
+        ):
+            retry_reason = (
+                "The earlier query returned no rows, so AskData retried once by relaxing the "
+                "current-relative time interpretation to the latest available period in the data."
+            )
+            retry_reasons.append(retry_reason)
+            retry_classifications.append("relative_time_no_rows")
+            recovery_actions.append("reinterpret_relative_time")
+            trace.retries.append(retry_reason)
+            trace.stages.append(
+                QueryTraceStep(
+                    stage="retry",
+                    label="Retried with relative time reinterpretation",
+                    detail="Adjusted the time filter toward the latest available data period after an empty result.",
+                )
+            )
+            try:
+                relative_time_attempt = self._retry_after_no_rows_with_relative_time(
+                    question=normalized_question,
+                    attempt=attempt,
+                    conversation_context=normalized_conversation_context,
+                    memory_context=memory_context,
+                    dataset_adapter=dataset_adapter,
+                    plan=plan,
+                    trace=trace,
+                )
+                if relative_time_attempt["pipeline_result"]["execution_result"].row_count > 0:
+                    attempt = relative_time_attempt
+            except QueryPipelineError:
+                if original_error is not None:
+                    raise original_error
+
         response = self._build_response(
             question=normalized_question,
             schema=schema,
@@ -162,12 +204,15 @@ class QueryPipelineService:
             attempt=attempt,
             trace=trace,
             retry_reasons=retry_reasons,
+            retry_classifications=retry_classifications,
+            recovery_actions=recovery_actions,
         )
         if self.settings.debug_mode:
             return response.model_copy(
                 update={
                     "debug": DebugPayload(
                         stage="success",
+                        dataset_adapter=dataset_adapter.name,
                         retrieval_tables=[table.full_name for table in attempt["retrieval_context"].tables],
                         validation_classification=attempt["pipeline_result"]["validation_result"].classification,
                         detected_tables=attempt["pipeline_result"]["validation_result"].detected_tables,
@@ -175,7 +220,10 @@ class QueryPipelineService:
                         planner_task_type=plan.task_type,
                         planner_confidence=plan.confidence,
                         planner_table_families=plan.candidate_table_families,
+                        planner_retry_guidance=plan.retry_guidance,
                         retry_reasons=retry_reasons,
+                        retry_classifications=retry_classifications,
+                        recovery_actions=recovery_actions,
                         inherited_turn_ids=plan.inherited_from_turn_ids,
                     )
                 }
@@ -286,6 +334,8 @@ class QueryPipelineService:
         attempt: dict,
         trace: QueryTrace,
         retry_reasons: list[str],
+        retry_classifications: list[str],
+        recovery_actions: list[str],
     ) -> QueryResponse:
         used_tables = self._merge_used_tables(
             schema=schema,
@@ -508,6 +558,58 @@ class QueryPipelineService:
             "repair_warnings": [],
         }
 
+    def _retry_after_no_rows_with_relative_time(
+        self,
+        question: str,
+        attempt: dict,
+        conversation_context: list[ConversationMessage],
+        memory_context: MemoryContext | None,
+        dataset_adapter: DatasetAdapter,
+        plan: QueryPlan,
+        trace: QueryTrace,
+    ) -> dict:
+        retrieval_context = attempt["retrieval_context"]
+        previous_sql = (
+            attempt["pipeline_result"]["validation_result"].validated_sql
+            or attempt["pipeline_result"]["generation_result"].sql
+        )
+        dataset_hints = dataset_adapter.prompt_hints(significant_tokens(question))
+        rewritten_generation = self._repair_generation(
+            question=question,
+            retrieval_context=retrieval_context,
+            previous_sql=previous_sql,
+            failure_message=(
+                "The query returned no rows. If the request uses a current-relative time phrase like "
+                "'this year' or 'this month', reinterpret it against the latest available period in the "
+                "dataset instead of the wall-clock current date."
+            ),
+            repair_stage="no_rows",
+            conversation_context=conversation_context,
+            memory_context=memory_context,
+            dataset_hints=dataset_hints,
+            plan=plan,
+            trace=trace,
+        )
+        pipeline_result = self._validate_and_execute_once(
+            question=question,
+            retrieval_context=retrieval_context,
+            generation_result=rewritten_generation,
+            allow_repair=False,
+            conversation_context=conversation_context,
+            memory_context=memory_context,
+            dataset_hints=dataset_hints,
+            plan=plan,
+            trace=trace,
+        )
+        return {
+            "retrieval_context": retrieval_context,
+            "generation_result": rewritten_generation,
+            "pipeline_result": pipeline_result,
+            "semantic_review_warnings": [
+                "SQL was rewritten once after a no-row result to reinterpret the relative time period."
+            ],
+        }
+
     def _repair_generation(
         self,
         question: str,
@@ -692,6 +794,44 @@ class QueryPipelineService:
     ) -> bool:
         if retry_reasons:
             return False
-        if not self.planner_service.should_retry_with_broader_retrieval(plan):
+        if "retry_no_rows_with_broader_focus" not in plan.retry_guidance:
             return False
         return attempt["pipeline_result"]["execution_result"].row_count == 0
+
+    def _should_retry_after_relative_time_no_rows(
+        self,
+        question: str,
+        attempt: dict,
+        recovery_actions: list[str],
+    ) -> bool:
+        if attempt["pipeline_result"]["execution_result"].row_count != 0:
+            return False
+        if "reinterpret_relative_time" in recovery_actions:
+            return False
+        return self._has_relative_time_phrase(question)
+
+    def _has_relative_time_phrase(self, question: str) -> bool:
+        normalized = question.lower()
+        phrases = (
+            "this year",
+            "this month",
+            "this quarter",
+            "current year",
+            "current month",
+            "current quarter",
+            "last year",
+            "last month",
+            "last quarter",
+        )
+        return any(phrase in normalized for phrase in phrases)
+
+    def _classify_retry_from_error(self, exc: QueryPipelineError) -> str:
+        if exc.code == "invalid_request" and exc.stage == "retrieval":
+            return "weak_retrieval"
+        if exc.code == "sql_generation_failed":
+            return "generation_failure"
+        if exc.code == "sql_validation_failed":
+            return "semantic_or_validation_mismatch"
+        if exc.code == "sql_execution_failed":
+            return "execution_failure"
+        return "retryable_failure"
