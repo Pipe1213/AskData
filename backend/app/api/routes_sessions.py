@@ -9,6 +9,7 @@ from app.schemas.session import (
     SessionListResponse,
     SessionRenameRequest,
 )
+from app.services.database_target_service import DatabaseTargetService
 from app.services.query_pipeline_service import QueryPipelineService
 from app.services.session_service import SessionService
 
@@ -21,7 +22,10 @@ def list_sessions(
     client_token: str = Depends(require_client_token),
 ) -> SessionListResponse:
     session_service = _get_session_service(request)
-    return SessionListResponse(sessions=session_service.list_sessions(client_token))
+    active_target = _require_persisted_target(request, client_token)
+    return SessionListResponse(
+        sessions=session_service.list_sessions(client_token, active_target.target_id)
+    )
 
 
 @router.get("/sessions/{session_id}", response_model=SessionDetailResponse)
@@ -31,7 +35,8 @@ def get_session_detail(
     client_token: str = Depends(require_client_token),
 ) -> SessionDetailResponse:
     session_service = _get_session_service(request)
-    session = session_service.get_session(client_token, session_id)
+    active_target = _require_persisted_target(request, client_token)
+    session = session_service.get_session(client_token, session_id, active_target.target_id)
     if session is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -49,8 +54,14 @@ def rename_session(
     client_token: str = Depends(require_client_token),
 ) -> SessionDetailResponse:
     session_service = _get_session_service(request)
+    active_target = _require_persisted_target(request, client_token)
     try:
-        renamed = session_service.rename_session(client_token, session_id, payload.title)
+        renamed = session_service.rename_session(
+            client_token,
+            session_id,
+            payload.title,
+            active_target.target_id,
+        )
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -63,7 +74,7 @@ def rename_session(
             detail="Session was not found for the current client token.",
         )
 
-    session = session_service.get_session(client_token, session_id)
+    session = session_service.get_session(client_token, session_id, active_target.target_id)
     if session is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -82,10 +93,26 @@ def rerun_turn(
 ) -> QueryResponse | JSONResponse:
     session_service = _get_session_service(request)
     pipeline_service = _get_pipeline_service(request)
-    schema_cache = getattr(request.app.state, "schema_cache", None)
+    target_service = _get_target_service(request)
     debug_mode = bool(getattr(getattr(pipeline_service, "settings", None), "debug_mode", False))
+    active_target = _require_persisted_target(request, client_token)
+    try:
+        _, schema = target_service.get_schema_for_active_target(client_token)
+    except QueryPipelineError as exc:
+        return JSONResponse(
+            status_code=_map_error_code_to_status(exc.code),
+            content=QueryErrorResponse(
+                error=ErrorPayload(**exc.to_error_payload()),
+                warnings=[],
+            ).model_dump(),
+        )
 
-    rerun_input = session_service.get_turn_rerun_context(client_token, session_id, turn_id)
+    rerun_input = session_service.get_turn_rerun_context(
+        client_token,
+        session_id,
+        turn_id,
+        active_target.target_id,
+    )
     if rerun_input is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -97,7 +124,8 @@ def rerun_turn(
     try:
         response = pipeline_service.run_query(
             question=question,
-            schema=schema_cache,
+            schema=schema,
+            connection_settings=active_target.connection_settings,
             conversation_context=conversation_context,
             memory_context=memory_context,
         )
@@ -105,6 +133,7 @@ def rerun_turn(
             client_token=client_token,
             response=response,
             session_id=session_id,
+            target_id=active_target.target_id,
         )
         return response.model_copy(
             update={
@@ -141,6 +170,7 @@ def rerun_turn(
             question=question,
             error_payload=error_payload,
             session_id=session_id,
+            target_id=active_target.target_id,
         )
         error_payload = error_payload.model_copy(
             update={
@@ -164,7 +194,13 @@ def export_turn_csv(
     client_token: str = Depends(require_client_token),
 ) -> Response:
     session_service = _get_session_service(request)
-    csv_content = session_service.export_turn_csv(client_token, session_id, turn_id)
+    active_target = _require_persisted_target(request, client_token)
+    csv_content = session_service.export_turn_csv(
+        client_token,
+        session_id,
+        turn_id,
+        active_target.target_id,
+    )
     if csv_content is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -198,11 +234,47 @@ def _get_pipeline_service(request: Request) -> QueryPipelineService:
     return pipeline_service
 
 
+def _get_target_service(request: Request) -> DatabaseTargetService:
+    target_service = getattr(request.app.state, "database_target_service", None)
+    if target_service is None:
+        target_service = DatabaseTargetService()
+        request.app.state.database_target_service = target_service
+
+    return target_service
+
+
+def _require_persisted_target(request: Request, client_token: str):
+    target_service = _get_target_service(request)
+    try:
+        active_target = target_service.get_active_target(client_token)
+    except QueryPipelineError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": exc.code,
+                "message": exc.message,
+                "details": exc.to_error_payload()["details"],
+            },
+        ) from exc
+    if active_target.persistence_allowed:
+        return active_target
+
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={
+            "code": "runtime_history_unavailable",
+            "message": "Persistent session history is disabled while a runtime PostgreSQL connection is active.",
+        },
+    )
+
+
 def _map_error_code_to_status(code: str) -> int:
     status_map = {
         "invalid_request": status.HTTP_400_BAD_REQUEST,
         "schema_unavailable": status.HTTP_503_SERVICE_UNAVAILABLE,
         "invalid_session": status.HTTP_404_NOT_FOUND,
+        "runtime_history_unavailable": status.HTTP_409_CONFLICT,
+        "runtime_target_missing": status.HTTP_409_CONFLICT,
         "sql_generation_failed": status.HTTP_502_BAD_GATEWAY,
         "unsafe_sql": status.HTTP_400_BAD_REQUEST,
         "sql_validation_failed": status.HTTP_400_BAD_REQUEST,

@@ -8,11 +8,12 @@ import { ResultsTable } from "@/components/result/results-table";
 import { SqlPanel } from "@/components/result/sql-panel";
 import { UsedTablesPanel } from "@/components/result/used-tables-panel";
 import { canRenderChart } from "@/lib/chart";
-import type { ConversationTurn } from "@/lib/types";
+import type { ConversationTurn, QueryTrace } from "@/lib/types";
 
 type QueryWorkspaceProps = {
   turns: ConversationTurn[];
   isLoading: boolean;
+  allowTurnActions?: boolean;
   onRerunTurn: (turnId: string, question: string) => void;
   onExportTurn: (turnId: string) => void;
 };
@@ -20,6 +21,7 @@ type QueryWorkspaceProps = {
 export function QueryWorkspace({
   turns,
   isLoading,
+  allowTurnActions = true,
   onRerunTurn,
   onExportTurn,
 }: QueryWorkspaceProps) {
@@ -52,6 +54,7 @@ export function QueryWorkspace({
             {turn.status === "success" ? (
               <SuccessReply
                 turn={turn}
+                allowTurnActions={allowTurnActions}
                 onExportTurn={onExportTurn}
                 onRerunTurn={onRerunTurn}
               />
@@ -93,33 +96,17 @@ function UserBubble({ children }: { children: string }) {
 }
 
 function LoadingReply() {
-  const loadingSteps = [
-    "Understanding question",
-    "Generating SQL",
-    "Validating query",
-    "Running query",
-  ];
-
   return (
     <AssistantFrame>
-      <div className="space-y-4">
-        <div className="flex items-center gap-4">
-          <div className="flex items-center gap-2">
-            <span className="typing-dot" />
-            <span className="typing-dot animation-delay-150" />
-            <span className="typing-dot animation-delay-300" />
-          </div>
-          <p className="text-sm leading-6 text-muted">
-            AskData is preparing the next answer.
-          </p>
+      <div className="flex items-center gap-4">
+        <div className="flex items-center gap-2">
+          <span className="typing-dot" />
+          <span className="typing-dot animation-delay-150" />
+          <span className="typing-dot animation-delay-300" />
         </div>
-        <div className="flex flex-wrap gap-2">
-          {loadingSteps.map((step) => (
-            <span key={step} className="chip">
-              {step}
-            </span>
-          ))}
-        </div>
+        <p className="text-sm leading-6 text-muted">
+          AskData is preparing the next answer.
+        </p>
       </div>
     </AssistantFrame>
   );
@@ -155,10 +142,12 @@ function ErrorReply({
 
 function SuccessReply({
   turn,
+  allowTurnActions,
   onRerunTurn,
   onExportTurn,
 }: {
   turn: Extract<ConversationTurn, { status: "success" }>;
+  allowTurnActions: boolean;
   onRerunTurn: (turnId: string, question: string) => void;
   onExportTurn: (turnId: string) => void;
 }) {
@@ -187,12 +176,18 @@ function SuccessReply({
     queryResult.repaired ? "repaired once" : null,
     queryResult.created_at ? formatTurnTime(queryResult.created_at) : null,
   ].filter(Boolean);
+  const hasDetails =
+    Boolean(showChartDetails) ||
+    Boolean(showTableDetails) ||
+    Boolean(queryResult.generated_sql) ||
+    queryResult.used_tables.length > 0 ||
+    Boolean(trace);
 
   return (
     <AssistantFrame>
-      <div className="space-y-6">
+      <div className="space-y-5">
         <div className="space-y-3">
-          <h3 className="max-w-[26ch] font-serif text-[2rem] leading-tight tracking-[-0.035em] text-ink md:text-[2.45rem]">
+          <h3 className="max-w-[28ch] font-serif text-[1.85rem] leading-tight tracking-[-0.035em] text-ink md:text-[2.2rem]">
             {queryResult.answer_summary}
           </h3>
         </div>
@@ -227,33 +222,35 @@ function SuccessReply({
           </div>
         ) : null}
 
-        <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-sm">
-          <button
-            type="button"
-            onClick={() => onRerunTurn(turn.id, turn.question)}
-            className="font-medium text-accent transition hover:opacity-75"
-          >
-            Rerun
-          </button>
-          <button
-            type="button"
-            onClick={() => onExportTurn(turn.id)}
-            className="font-medium text-accent transition hover:opacity-75"
-          >
-            Export CSV
-          </button>
-        </div>
+        {allowTurnActions ? (
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
+            <button
+              type="button"
+              onClick={() => onRerunTurn(turn.id, turn.question)}
+              className="font-medium text-accent transition hover:opacity-75"
+            >
+              Rerun
+            </button>
+            <button
+              type="button"
+              onClick={() => onExportTurn(turn.id)}
+              className="font-medium text-accent transition hover:opacity-75"
+            >
+              Export CSV
+            </button>
+          </div>
+        ) : null}
 
-        <div className="space-y-3">
-          {showChartDetails ? (
-            <details className="details-card">
-              <summary>
-                <span>Show chart</span>
-                <span className="text-xs font-medium text-muted">
-                  {queryResult.chart_recommendation.type}
-                </span>
-              </summary>
-              <div className="details-body">
+        {hasDetails ? (
+          <details className="rounded-[18px] border border-line/80 bg-[#fffdf9] px-4 py-3">
+            <summary className="flex cursor-pointer list-none items-center gap-3 text-sm font-medium text-accent">
+              <span>Details</span>
+              <span className="text-xs font-medium uppercase tracking-[0.12em] text-muted">
+                SQL, lineage, trace
+              </span>
+            </summary>
+            <div className="mt-4 space-y-4">
+              {showChartDetails ? (
                 <ChartPanel
                   chartRecommendation={queryResult.chart_recommendation}
                   columns={queryResult.columns}
@@ -261,19 +258,9 @@ function SuccessReply({
                   isLoading={false}
                   variant="embedded"
                 />
-              </div>
-            </details>
-          ) : null}
+              ) : null}
 
-          {showTableDetails ? (
-            <details className="details-card">
-              <summary>
-                <span>Show result rows</span>
-                <span className="text-xs font-medium text-muted">
-                  {queryResult.row_count} rows
-                </span>
-              </summary>
-              <div className="details-body">
+              {showTableDetails ? (
                 <ResultsTable
                   columns={queryResult.columns}
                   rows={queryResult.rows}
@@ -281,104 +268,29 @@ function SuccessReply({
                   isLoading={false}
                   variant="embedded"
                 />
-              </div>
-            </details>
-          ) : null}
+              ) : null}
 
-          <details className="details-card">
-            <summary>
-              <span>Show SQL</span>
-              <span className="text-xs font-medium text-muted">optional</span>
-            </summary>
-            <div className="details-body">
-              <SqlPanel
-                sql={queryResult.generated_sql}
-                isLoading={false}
-                variant="inline"
-              />
-            </div>
-          </details>
+              {queryResult.generated_sql ? (
+                <SqlPanel
+                  sql={queryResult.generated_sql}
+                  isLoading={false}
+                  variant="inline"
+                />
+              ) : null}
 
-          {queryResult.used_tables.length > 0 ? (
-            <details className="details-card">
-              <summary>
-                <span>Show tables used</span>
-                <span className="text-xs font-medium text-muted">{queryResult.used_tables.length}</span>
-              </summary>
-              <div className="details-body">
+              {queryResult.used_tables.length > 0 ? (
                 <UsedTablesPanel
                   title="Tables used for this answer"
                   description="These tables were reported by the backend after validation and execution."
                   tables={queryResult.used_tables}
                   variant="inline"
                 />
-              </div>
-            </details>
-          ) : null}
+              ) : null}
 
-          {trace ? (
-            <details className="details-card" open={trace.retries.length > 0}>
-              <summary>
-                <span>How this answer was produced</span>
-                <span className="text-xs font-medium text-muted">optional</span>
-              </summary>
-              <div className="details-body space-y-4">
-                <p className="text-sm leading-7 text-muted md:text-base">{trace.interpreted_goal}</p>
-                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted">
-                  {trace.confidence} confidence
-                </p>
-                {trace.memory_summary ? (
-                  <p className="text-sm leading-7 text-muted">
-                    {trace.memory_summary}
-                  </p>
-                ) : null}
-                {trace.schema_focus.length > 0 ? (
-                  <div className="space-y-2">
-                    <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted">
-                      Schema focus
-                    </p>
-                    <div className="flex flex-wrap gap-2">
-                      {trace.schema_focus.map((focus) => (
-                        <span key={focus} className="chip">
-                          {focus}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                ) : null}
-                {trace.retries.length > 0 ? (
-                  <div className="space-y-2">
-                    <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted">
-                      Retries
-                    </p>
-                    <div className="space-y-2">
-                      {trace.retries.map((retry, index) => (
-                        <p key={`${retry}-${index}`} className="text-sm leading-7 text-muted">
-                          {retry}
-                        </p>
-                      ))}
-                    </div>
-                  </div>
-                ) : null}
-                <div className="space-y-2">
-                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted">
-                    Trace
-                  </p>
-                  <div className="space-y-3">
-                    {trace.stages.map((step, index) => (
-                      <div key={`${step.stage}-${index}`} className="space-y-1">
-                        <p className="text-sm font-semibold text-ink">{step.label}</p>
-                        {step.detail ? (
-                          <p className="text-sm leading-7 text-muted">{step.detail}</p>
-                        ) : null}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            </details>
-          ) : null}
-        </div>
+              {trace ? <TraceDetails trace={trace} /> : null}
+            </div>
+          </details>
+        ) : null}
 
         {footerMeta.length > 0 ? (
           <div className="flex flex-wrap gap-x-4 gap-y-2 text-xs text-muted">
@@ -404,4 +316,66 @@ function formatTurnTime(createdAt: string): string {
     hour: "numeric",
     minute: "2-digit",
   });
+}
+
+function TraceDetails({ trace }: { trace: QueryTrace }) {
+  return (
+    <section className="space-y-3 rounded-[20px] border border-line bg-white/80 px-4 py-4">
+      <div className="space-y-1">
+        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted">
+          How AskData approached this
+        </p>
+        <p className="text-sm leading-7 text-muted md:text-base">{trace.interpreted_goal}</p>
+      </div>
+      <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted">
+        {trace.confidence} confidence
+      </p>
+      {trace.memory_summary ? (
+        <p className="text-sm leading-7 text-muted">{trace.memory_summary}</p>
+      ) : null}
+      {trace.schema_focus.length > 0 ? (
+        <div className="space-y-2">
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted">
+            Schema focus
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {trace.schema_focus.map((focus) => (
+              <span key={focus} className="chip">
+                {focus}
+              </span>
+            ))}
+          </div>
+        </div>
+      ) : null}
+      {trace.retries.length > 0 ? (
+        <div className="space-y-2">
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted">
+            Retries
+          </p>
+          <div className="space-y-2">
+            {trace.retries.map((retry, index) => (
+              <p key={`${retry}-${index}`} className="text-sm leading-7 text-muted">
+                {retry}
+              </p>
+            ))}
+          </div>
+        </div>
+      ) : null}
+      <div className="space-y-2">
+        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted">
+          Trace
+        </p>
+        <div className="space-y-3">
+          {trace.stages.map((step, index) => (
+            <div key={`${step.stage}-${index}`} className="space-y-1">
+              <p className="text-sm font-semibold text-ink">{step.label}</p>
+              {step.detail ? (
+                <p className="text-sm leading-7 text-muted">{step.detail}</p>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
 }

@@ -2,6 +2,7 @@ from psycopg.rows import dict_row
 
 from app.core.config import Settings, get_settings
 from app.db.connection import get_db_connection
+from app.schemas.data_source import PostgresConnectionSettings
 
 TABLES_QUERY = """
 SELECT
@@ -13,6 +14,7 @@ JOIN pg_namespace AS ns
     ON ns.oid = cls.relnamespace
 WHERE cls.relkind = 'r'
   AND ns.nspname NOT IN ('pg_catalog', 'information_schema', 'askdata_app')
+  AND (%(schema_allowlist)s::text[] IS NULL OR ns.nspname = ANY(%(schema_allowlist)s))
 ORDER BY ns.nspname, cls.relname
 """
 
@@ -34,6 +36,7 @@ LEFT JOIN pg_catalog.pg_description AS pgd
     ON pgd.objoid = st.relid
    AND pgd.objsubid = cols.ordinal_position
 WHERE cols.table_schema NOT IN ('pg_catalog', 'information_schema', 'askdata_app')
+  AND (%(schema_allowlist)s::text[] IS NULL OR cols.table_schema = ANY(%(schema_allowlist)s))
 ORDER BY cols.table_schema, cols.table_name, cols.ordinal_position
 """
 
@@ -50,6 +53,7 @@ JOIN information_schema.key_column_usage AS kcu
    AND tc.table_name = kcu.table_name
 WHERE tc.constraint_type = 'PRIMARY KEY'
   AND tc.table_schema NOT IN ('pg_catalog', 'information_schema', 'askdata_app')
+  AND (%(schema_allowlist)s::text[] IS NULL OR tc.table_schema = ANY(%(schema_allowlist)s))
 ORDER BY tc.table_schema, tc.table_name, kcu.ordinal_position
 """
 
@@ -73,34 +77,80 @@ JOIN information_schema.constraint_column_usage AS ccu
    AND ccu.table_schema = tc.table_schema
 WHERE tc.constraint_type = 'FOREIGN KEY'
   AND tc.table_schema NOT IN ('pg_catalog', 'information_schema', 'askdata_app')
+  AND (%(schema_allowlist)s::text[] IS NULL OR tc.table_schema = ANY(%(schema_allowlist)s))
 ORDER BY tc.constraint_name, kcu.ordinal_position
 """
 
 
-def _run_query(query: str, settings: Settings | None = None) -> list[dict]:
-    with get_db_connection(settings) as connection:
+def _run_query(
+    query: str,
+    settings: Settings | None = None,
+    connection_settings: PostgresConnectionSettings | None = None,
+    schema_allowlist: list[str] | None = None,
+) -> list[dict]:
+    params = {
+        "schema_allowlist": schema_allowlist or None,
+    }
+
+    with get_db_connection(settings, connection_settings=connection_settings) as connection:
         with connection.cursor(row_factory=dict_row) as cursor:
-            cursor.execute(query)
+            cursor.execute(query, params)
             rows = cursor.fetchall()
 
     return [dict(row) for row in rows]
 
 
-def fetch_tables(settings: Settings | None = None) -> list[dict]:
+def fetch_tables(
+    settings: Settings | None = None,
+    connection_settings: PostgresConnectionSettings | None = None,
+    schema_allowlist: list[str] | None = None,
+) -> list[dict]:
     active_settings = settings or get_settings()
-    return _run_query(TABLES_QUERY, active_settings)
+    return _run_query(
+        TABLES_QUERY,
+        active_settings,
+        connection_settings=connection_settings,
+        schema_allowlist=schema_allowlist,
+    )
 
 
-def fetch_columns(settings: Settings | None = None) -> list[dict]:
+def fetch_columns(
+    settings: Settings | None = None,
+    connection_settings: PostgresConnectionSettings | None = None,
+    schema_allowlist: list[str] | None = None,
+) -> list[dict]:
     active_settings = settings or get_settings()
-    return _run_query(COLUMNS_QUERY, active_settings)
+    return _run_query(
+        COLUMNS_QUERY,
+        active_settings,
+        connection_settings=connection_settings,
+        schema_allowlist=schema_allowlist,
+    )
 
 
-def fetch_primary_keys(settings: Settings | None = None) -> list[dict]:
+def fetch_primary_keys(
+    settings: Settings | None = None,
+    connection_settings: PostgresConnectionSettings | None = None,
+    schema_allowlist: list[str] | None = None,
+) -> list[dict]:
     active_settings = settings or get_settings()
-    return _run_query(PRIMARY_KEYS_QUERY, active_settings)
+    return _run_query(
+        PRIMARY_KEYS_QUERY,
+        active_settings,
+        connection_settings=connection_settings,
+        schema_allowlist=schema_allowlist,
+    )
 
 
-def fetch_foreign_keys(settings: Settings | None = None) -> list[dict]:
+def fetch_foreign_keys(
+    settings: Settings | None = None,
+    connection_settings: PostgresConnectionSettings | None = None,
+    schema_allowlist: list[str] | None = None,
+) -> list[dict]:
     active_settings = settings or get_settings()
-    return _run_query(FOREIGN_KEYS_QUERY, active_settings)
+    return _run_query(
+        FOREIGN_KEYS_QUERY,
+        active_settings,
+        connection_settings=connection_settings,
+        schema_allowlist=schema_allowlist,
+    )

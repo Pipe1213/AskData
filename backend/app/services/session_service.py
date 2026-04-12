@@ -38,6 +38,7 @@ class SessionService:
                     CREATE TABLE IF NOT EXISTS {self.schema_name}.chat_sessions (
                         id TEXT PRIMARY KEY,
                         client_token TEXT NOT NULL,
+                        target_id TEXT NOT NULL DEFAULT 'demo_pagila',
                         title TEXT NOT NULL,
                         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -74,6 +75,12 @@ class SessionService:
                 )
                 cursor.execute(
                     f"""
+                    ALTER TABLE {self.schema_name}.chat_sessions
+                    ADD COLUMN IF NOT EXISTS target_id TEXT NOT NULL DEFAULT 'demo_pagila'
+                    """
+                )
+                cursor.execute(
+                    f"""
                     ALTER TABLE {self.schema_name}.chat_turns
                     ADD COLUMN IF NOT EXISTS primary_artifact TEXT NOT NULL DEFAULT 'summary'
                     """
@@ -99,7 +106,7 @@ class SessionService:
                 cursor.execute(
                     f"""
                     CREATE INDEX IF NOT EXISTS chat_sessions_client_updated_idx
-                    ON {self.schema_name}.chat_sessions (client_token, updated_at DESC)
+                    ON {self.schema_name}.chat_sessions (client_token, target_id, updated_at DESC)
                     """
                 )
                 cursor.execute(
@@ -109,7 +116,7 @@ class SessionService:
                     """
                 )
 
-    def list_sessions(self, client_token: str) -> list[SessionSummary]:
+    def list_sessions(self, client_token: str, target_id: str) -> list[SessionSummary]:
         with get_db_connection(self.settings) as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
@@ -137,9 +144,10 @@ class SessionService:
                         LIMIT 1
                     ) AS latest_turn ON TRUE
                     WHERE s.client_token = %s
+                      AND s.target_id = %s
                     ORDER BY s.updated_at DESC
                     """,
-                    (client_token,),
+                    (client_token, target_id),
                 )
                 rows = cursor.fetchall()
 
@@ -156,16 +164,16 @@ class SessionService:
             for row in rows
         ]
 
-    def get_session(self, client_token: str, session_id: str) -> SessionDetail | None:
+    def get_session(self, client_token: str, session_id: str, target_id: str) -> SessionDetail | None:
         with get_db_connection(self.settings) as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
                     f"""
                     SELECT id, title, created_at, updated_at
                     FROM {self.schema_name}.chat_sessions
-                    WHERE id = %s AND client_token = %s
+                    WHERE id = %s AND client_token = %s AND target_id = %s
                     """,
-                    (session_id, client_token),
+                    (session_id, client_token, target_id),
                 )
                 session_row = cursor.fetchone()
                 if session_row is None:
@@ -216,6 +224,7 @@ class SessionService:
         client_token: str,
         session_id: str,
         title: str,
+        target_id: str,
     ) -> SessionSummary | None:
         normalized_title = " ".join(title.strip().split())
         if not normalized_title:
@@ -227,10 +236,10 @@ class SessionService:
                     f"""
                     UPDATE {self.schema_name}.chat_sessions
                     SET title = %s, updated_at = NOW()
-                    WHERE id = %s AND client_token = %s
+                    WHERE id = %s AND client_token = %s AND target_id = %s
                     RETURNING id, title, created_at, updated_at
                     """,
-                    (normalized_title[:120], session_id, client_token),
+                    (normalized_title[:120], session_id, client_token, target_id),
                 )
                 updated = cursor.fetchone()
                 if updated is None:
@@ -249,11 +258,13 @@ class SessionService:
         client_token: str,
         response: QueryResponse,
         session_id: str | None = None,
+        target_id: str = "demo_pagila",
     ) -> PersistedTurnRef:
         active_session_id = self._ensure_session(
             client_token=client_token,
             question=response.question,
             session_id=session_id,
+            target_id=target_id,
         )
         turn_id = self._new_id()
 
@@ -336,11 +347,13 @@ class SessionService:
         question: str,
         error_payload: QueryErrorResponse,
         session_id: str | None = None,
+        target_id: str = "demo_pagila",
     ) -> PersistedTurnRef:
         active_session_id = self._ensure_session(
             client_token=client_token,
             question=question,
             session_id=session_id,
+            target_id=target_id,
         )
         turn_id = self._new_id()
 
@@ -397,8 +410,9 @@ class SessionService:
         client_token: str,
         session_id: str,
         turn_id: str,
+        target_id: str,
     ) -> tuple[str, list[ConversationMessage], MemoryContext | None] | None:
-        session = self.get_session(client_token, session_id)
+        session = self.get_session(client_token, session_id, target_id)
         if session is None:
             return None
 
@@ -442,11 +456,12 @@ class SessionService:
         client_token: str,
         session_id: str | None,
         question: str,
+        target_id: str,
     ) -> MemoryContext | None:
         if not session_id:
             return None
 
-        session = self.get_session(client_token, session_id)
+        session = self.get_session(client_token, session_id, target_id)
         if session is None:
             return None
 
@@ -462,6 +477,7 @@ class SessionService:
         client_token: str,
         session_id: str,
         turn_id: str,
+        target_id: str,
     ) -> str | None:
         with get_db_connection(self.settings) as connection:
             with connection.cursor() as cursor:
@@ -471,9 +487,12 @@ class SessionService:
                     FROM {self.schema_name}.chat_turns AS t
                     JOIN {self.schema_name}.chat_sessions AS s
                         ON s.id = t.session_id
-                    WHERE t.id = %s AND t.session_id = %s AND s.client_token = %s
+                    WHERE t.id = %s
+                      AND t.session_id = %s
+                      AND s.client_token = %s
+                      AND s.target_id = %s
                     """,
-                    (turn_id, session_id, client_token),
+                    (turn_id, session_id, client_token, target_id),
                 )
                 row = cursor.fetchone()
 
@@ -498,6 +517,7 @@ class SessionService:
         client_token: str,
         question: str,
         session_id: str | None,
+        target_id: str,
     ) -> str:
         if session_id:
             with get_db_connection(self.settings) as connection:
@@ -506,9 +526,9 @@ class SessionService:
                         f"""
                         SELECT id
                         FROM {self.schema_name}.chat_sessions
-                        WHERE id = %s AND client_token = %s
+                        WHERE id = %s AND client_token = %s AND target_id = %s
                         """,
-                        (session_id, client_token),
+                        (session_id, client_token, target_id),
                     )
                     existing = cursor.fetchone()
             if existing is None:
@@ -523,12 +543,14 @@ class SessionService:
                     INSERT INTO {self.schema_name}.chat_sessions (
                         id,
                         client_token,
+                        target_id,
                         title
-                    ) VALUES (%s, %s, %s)
+                    ) VALUES (%s, %s, %s, %s)
                     """,
                     (
                         created_session_id,
                         client_token,
+                        target_id,
                         self._build_session_title(question),
                     ),
                 )

@@ -132,7 +132,12 @@ class FakeSQLValidationService:
 
 
 class FakeSQLExecutionService:
-    def execute_sql(self, validated_sql: str) -> SQLExecutionResult:
+    def execute_sql(
+        self,
+        validated_sql: str,
+        connection_settings=None,
+    ) -> SQLExecutionResult:
+        del connection_settings
         return SQLExecutionResult(
             sql=validated_sql,
             success=True,
@@ -415,7 +420,12 @@ def test_query_pipeline_retries_once_with_broader_retrieval_after_no_rows(sample
         def __init__(self) -> None:
             self.calls = 0
 
-        def execute_sql(self, validated_sql: str) -> SQLExecutionResult:
+        def execute_sql(
+            self,
+            validated_sql: str,
+            connection_settings=None,
+        ) -> SQLExecutionResult:
+            del connection_settings
             self.calls += 1
             if self.calls == 1:
                 return SQLExecutionResult(
@@ -510,7 +520,12 @@ def test_query_pipeline_rewrites_after_relative_time_no_rows(sample_schema) -> N
             )
 
     class NoRowsUntilRepairExecutionService:
-        def execute_sql(self, validated_sql: str) -> SQLExecutionResult:
+        def execute_sql(
+            self,
+            validated_sql: str,
+            connection_settings=None,
+        ) -> SQLExecutionResult:
+            del connection_settings
             if "2022" not in validated_sql:
                 return SQLExecutionResult(
                     sql=validated_sql,

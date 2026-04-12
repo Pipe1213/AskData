@@ -130,6 +130,56 @@ export type QueryErrorResponse = {
   } | null;
 };
 
+export type SslMode = "disable" | "prefer" | "require";
+
+export type DataSourceSummary = {
+  target_id: string;
+  target_type: "demo_pagila" | "demo_retail_ops" | "runtime_postgres";
+  display_name: string;
+  persistence_allowed: boolean;
+  is_active: boolean;
+  database_name?: string | null;
+  host?: string | null;
+  schema_allowlist: string[];
+};
+
+export type DataSourcesResponse = {
+  active_target: DataSourceSummary;
+  demo_targets: DataSourceSummary[];
+  runtime_target?: DataSourceSummary | null;
+};
+
+export type RuntimePostgresConnectionInput = {
+  host: string;
+  port: number;
+  database: string;
+  user: string;
+  password: string;
+  sslmode: SslMode;
+  schema_allowlist?: string[];
+};
+
+export type RuntimeConnectionTestResponse = {
+  ok: true;
+  database_version: string;
+  visible_schemas: string[];
+  table_count: number;
+  warnings: string[];
+};
+
+export type DataSourceActivationResponse = {
+  active_target: DataSourceSummary;
+  table_count: number;
+};
+
+export type RuntimeTargetActivationResponse = {
+  active_target: DataSourceSummary;
+  database_version: string;
+  visible_schemas: string[];
+  table_count: number;
+  warnings: string[];
+};
+
 export type ConversationTurn =
   | {
       id: string;

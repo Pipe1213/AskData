@@ -7,21 +7,29 @@ import { QuestionForm } from "@/components/query/question-form";
 import { QueryWorkspace } from "@/components/query/query-workspace";
 import { SchemaOverview } from "@/components/schema/schema-overview";
 import {
+  activateDemoDataSource,
+  activateRuntimePostgresConnection,
   ApiError,
+  disconnectRuntimeDataSource,
   exportSessionTurnCsv,
+  fetchDataSources,
   fetchExampleQuestions,
   fetchSessionDetail,
   fetchSessions,
   queryAskData,
   renameSession,
   rerunSessionTurn,
+  testRuntimePostgresConnection,
 } from "@/lib/api";
 import type {
   ConversationMessage,
   ConversationTurn,
+  DataSourcesResponse,
   ExamplePromptGroup,
   ExampleQuestion,
   QueryErrorResponse,
+  RuntimeConnectionTestResponse,
+  RuntimePostgresConnectionInput,
   SessionDetail,
   SessionSummary,
 } from "@/lib/types";
@@ -47,15 +55,28 @@ export function QueryDashboard() {
   const [examplePromptGroups, setExamplePromptGroups] = useState<ExamplePromptGroup[]>(
     groupExamples(fallbackPrompts),
   );
+  const [dataSources, setDataSources] = useState<DataSourcesResponse | null>(null);
+  const [schemaRefreshKey, setSchemaRefreshKey] = useState(0);
+
+  const activeTarget = dataSources?.active_target ?? null;
 
   useEffect(() => {
     let isActive = true;
 
     async function loadInitialState() {
       try {
+        const sourceState = await fetchDataSources();
+        if (!isActive) {
+          return;
+        }
+
+        setDataSources(sourceState);
+
         const [examples, sessionSummaries] = await Promise.all([
           fetchExampleQuestions().catch(() => [] as ExampleQuestion[]),
-          fetchSessions().catch(() => [] as SessionSummary[]),
+          sourceState.active_target.persistence_allowed
+            ? fetchSessions().catch(() => [] as SessionSummary[])
+            : Promise.resolve([] as SessionSummary[]),
         ]);
         if (!isActive) {
           return;
@@ -104,7 +125,7 @@ export function QueryDashboard() {
     try {
       const result = await queryAskData({
         question: trimmedQuestion,
-        session_id: activeSessionId,
+        session_id: activeTarget?.persistence_allowed ? activeSessionId : null,
         conversation_context: conversationContext,
       });
       setTurns((currentTurns) =>
@@ -153,6 +174,11 @@ export function QueryDashboard() {
   }
 
   async function refreshSessions() {
+    if (!activeTarget?.persistence_allowed) {
+      setSessions([]);
+      return;
+    }
+
     try {
       const sessionSummaries = await fetchSessions();
       setSessions(sessionSummaries);
@@ -161,8 +187,39 @@ export function QueryDashboard() {
     }
   }
 
+  async function refreshExamplesAndSessions(persistenceAllowed: boolean) {
+    const [examples, sessionSummaries] = await Promise.all([
+      fetchExampleQuestions().catch(() => [] as ExampleQuestion[]),
+      persistenceAllowed
+        ? fetchSessions().catch(() => [] as SessionSummary[])
+        : Promise.resolve([] as SessionSummary[]),
+    ]);
+
+    const questions = normalizeExamples(examples);
+    if (questions.length > 0) {
+      setExamplePromptGroups(groupExamples(questions));
+    } else {
+      setExamplePromptGroups(groupExamples(fallbackPrompts));
+    }
+    setSessions(sessionSummaries);
+  }
+
+  async function refreshTargetState() {
+    const sourceState = await fetchDataSources();
+    setDataSources(sourceState);
+    setSchemaRefreshKey((current) => current + 1);
+    return sourceState;
+  }
+
+  function resetChatState() {
+    setActiveView("chat");
+    setActiveSessionId(null);
+    setQuestion("");
+    setTurns([]);
+  }
+
   async function handleSelectSession(sessionId: string) {
-    if (isLoading) {
+    if (isLoading || !activeTarget?.persistence_allowed) {
       return;
     }
 
@@ -182,10 +239,7 @@ export function QueryDashboard() {
       return;
     }
 
-    setActiveView("chat");
-    setActiveSessionId(null);
-    setQuestion("");
-    setTurns([]);
+    resetChatState();
   }
 
   function handleSelectPrompt(prompt: string) {
@@ -194,7 +248,7 @@ export function QueryDashboard() {
   }
 
   async function handleRenameSession() {
-    if (!activeSessionId) {
+    if (!activeSessionId || !activeTarget?.persistence_allowed) {
       return;
     }
 
@@ -228,7 +282,7 @@ export function QueryDashboard() {
   }
 
   async function handleRerunTurn(turnId: string, originalQuestion: string) {
-    if (!activeSessionId || isLoading) {
+    if (!activeSessionId || isLoading || !activeTarget?.persistence_allowed) {
       return;
     }
 
@@ -286,7 +340,7 @@ export function QueryDashboard() {
   }
 
   async function handleExportTurn(turnId: string) {
-    if (!activeSessionId) {
+    if (!activeSessionId || !activeTarget?.persistence_allowed) {
       return;
     }
 
@@ -305,17 +359,32 @@ export function QueryDashboard() {
     }
   }
 
-  const latestResolvedTurn = [...turns]
-    .reverse()
-    .find((turn) => turn.status === "success" || turn.status === "error");
-  const latestWarnings =
-    latestResolvedTurn?.status === "success"
-      ? latestResolvedTurn.response.warnings
-      : latestResolvedTurn?.status === "error"
-        ? latestResolvedTurn.error.warnings
-        : [];
-  const latestUsedTables =
-    latestResolvedTurn?.status === "success" ? latestResolvedTurn.response.used_tables : [];
+  async function handleActivateDemoTarget(targetId: "demo_pagila" | "demo_retail_ops") {
+    await activateDemoDataSource(targetId);
+    const sourceState = await refreshTargetState();
+    resetChatState();
+    await refreshExamplesAndSessions(sourceState.active_target.persistence_allowed);
+  }
+
+  async function handleDisconnectRuntimeTarget() {
+    await disconnectRuntimeDataSource();
+    const sourceState = await refreshTargetState();
+    resetChatState();
+    await refreshExamplesAndSessions(sourceState.active_target.persistence_allowed);
+  }
+
+  async function handleTestRuntimeConnection(
+    payload: RuntimePostgresConnectionInput,
+  ): Promise<RuntimeConnectionTestResponse> {
+    return testRuntimePostgresConnection(payload);
+  }
+
+  async function handleActivateRuntimeConnection(payload: RuntimePostgresConnectionInput) {
+    await activateRuntimePostgresConnection(payload);
+    const sourceState = await refreshTargetState();
+    resetChatState();
+    await refreshExamplesAndSessions(sourceState.active_target.persistence_allowed);
+  }
 
   return (
     <main
@@ -337,9 +406,14 @@ export function QueryDashboard() {
         activeSessionId={activeSessionId}
         onSelectSession={handleSelectSession}
         onRenameSession={handleRenameSession}
-        warnings={latestWarnings}
-        usedTables={latestUsedTables}
         isLoading={isLoading}
+        activeTarget={activeTarget}
+        demoTargets={dataSources?.demo_targets ?? []}
+        runtimeTarget={dataSources?.runtime_target ?? null}
+        onActivateDemoTarget={handleActivateDemoTarget}
+        onDisconnectRuntimeTarget={handleDisconnectRuntimeTarget}
+        onTestRuntimeConnection={handleTestRuntimeConnection}
+        onActivateRuntimeConnection={handleActivateRuntimeConnection}
       />
 
       <section className="panel flex h-full min-h-0 flex-col overflow-hidden">
@@ -349,6 +423,7 @@ export function QueryDashboard() {
               <QueryWorkspace
                 turns={turns}
                 isLoading={isLoading}
+                allowTurnActions={Boolean(activeTarget?.persistence_allowed)}
                 onExportTurn={handleExportTurn}
                 onRerunTurn={handleRerunTurn}
               />
@@ -364,7 +439,11 @@ export function QueryDashboard() {
             </div>
           </>
         ) : (
-          <SchemaOverview variant="embedded" />
+          <SchemaOverview
+            variant="embedded"
+            refreshKey={String(schemaRefreshKey)}
+            targetLabel={activeTarget?.display_name ?? "active"}
+          />
         )}
       </section>
     </main>
@@ -509,4 +588,3 @@ function groupExamples(prompts: string[]): ExamplePromptGroup[] {
 
   return groups.filter((group) => group.prompts.length > 0);
 }
-

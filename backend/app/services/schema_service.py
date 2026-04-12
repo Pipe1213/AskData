@@ -13,17 +13,39 @@ from app.db.metadata_models import (
     ForeignKeyMetadata,
     TableMetadata,
 )
+from app.schemas.data_source import PostgresConnectionSettings
 
 
 class SchemaService:
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or get_settings()
 
-    def load_schema(self) -> DatabaseSchema:
-        table_rows = fetch_tables(self.settings)
-        column_rows = fetch_columns(self.settings)
-        primary_key_rows = fetch_primary_keys(self.settings)
-        foreign_key_rows = fetch_foreign_keys(self.settings)
+    def load_schema(
+        self,
+        connection_settings: PostgresConnectionSettings | None = None,
+        schema_allowlist: list[str] | None = None,
+    ) -> DatabaseSchema:
+        effective_allowlist = schema_allowlist or ["public"]
+        table_rows = fetch_tables(
+            self.settings,
+            connection_settings=connection_settings,
+            schema_allowlist=effective_allowlist,
+        )
+        column_rows = fetch_columns(
+            self.settings,
+            connection_settings=connection_settings,
+            schema_allowlist=effective_allowlist,
+        )
+        primary_key_rows = fetch_primary_keys(
+            self.settings,
+            connection_settings=connection_settings,
+            schema_allowlist=effective_allowlist,
+        )
+        foreign_key_rows = fetch_foreign_keys(
+            self.settings,
+            connection_settings=connection_settings,
+            schema_allowlist=effective_allowlist,
+        )
 
         tables_by_key = self._build_table_map(table_rows)
         self._attach_columns(tables_by_key, column_rows)

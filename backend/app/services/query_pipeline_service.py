@@ -2,6 +2,7 @@ from app.core.config import Settings, get_settings
 from app.core.exceptions import QueryPipelineError
 from app.db.metadata_models import DatabaseSchema
 from app.llm.base import LLMClientError
+from app.schemas.data_source import PostgresConnectionSettings
 from app.schemas.query import (
     ConversationMessage,
     DebugPayload,
@@ -53,6 +54,7 @@ class QueryPipelineService:
         self,
         question: str,
         schema: DatabaseSchema | None,
+        connection_settings: PostgresConnectionSettings | None = None,
         conversation_context: list[ConversationMessage] | None = None,
         memory_context: MemoryContext | None = None,
     ) -> QueryResponse:
@@ -92,6 +94,7 @@ class QueryPipelineService:
             attempt = self._run_attempt(
                 question=normalized_question,
                 schema=schema,
+                connection_settings=connection_settings,
                 conversation_context=normalized_conversation_context,
                 memory_context=memory_context,
                 dataset_adapter=dataset_adapter,
@@ -119,6 +122,7 @@ class QueryPipelineService:
             attempt = self._run_attempt(
                 question=normalized_question,
                 schema=schema,
+                connection_settings=connection_settings,
                 conversation_context=normalized_conversation_context,
                 memory_context=memory_context,
                 dataset_adapter=dataset_adapter,
@@ -148,6 +152,7 @@ class QueryPipelineService:
                 broader_attempt = self._run_attempt(
                     question=normalized_question,
                     schema=schema,
+                    connection_settings=connection_settings,
                     conversation_context=normalized_conversation_context,
                     memory_context=memory_context,
                     dataset_adapter=dataset_adapter,
@@ -185,6 +190,7 @@ class QueryPipelineService:
                 relative_time_attempt = self._retry_after_no_rows_with_relative_time(
                     question=normalized_question,
                     attempt=attempt,
+                    connection_settings=connection_settings,
                     conversation_context=normalized_conversation_context,
                     memory_context=memory_context,
                     dataset_adapter=dataset_adapter,
@@ -235,6 +241,7 @@ class QueryPipelineService:
         self,
         question: str,
         schema: DatabaseSchema,
+        connection_settings: PostgresConnectionSettings | None,
         conversation_context: list[ConversationMessage],
         memory_context: MemoryContext | None,
         dataset_adapter: DatasetAdapter,
@@ -311,6 +318,7 @@ class QueryPipelineService:
             question=question,
             retrieval_context=retrieval_context,
             generation_result=generation_result,
+            connection_settings=connection_settings,
             allow_repair=True,
             conversation_context=conversation_context,
             memory_context=memory_context,
@@ -441,6 +449,7 @@ class QueryPipelineService:
         question: str,
         retrieval_context,
         generation_result,
+        connection_settings: PostgresConnectionSettings | None,
         allow_repair: bool,
         conversation_context: list[ConversationMessage],
         memory_context: MemoryContext | None,
@@ -476,6 +485,7 @@ class QueryPipelineService:
                     question=question,
                     retrieval_context=retrieval_context,
                     generation_result=repaired_result,
+                    connection_settings=connection_settings,
                     allow_repair=False,
                     conversation_context=conversation_context,
                     memory_context=memory_context,
@@ -498,7 +508,8 @@ class QueryPipelineService:
             )
 
         execution_result = self.sql_execution_service.execute_sql(
-            validation_result.validated_sql or generation_result.sql
+            validation_result.validated_sql or generation_result.sql,
+            connection_settings=connection_settings,
         )
         if not execution_result.success:
             if allow_repair:
@@ -522,6 +533,7 @@ class QueryPipelineService:
                     question=question,
                     retrieval_context=retrieval_context,
                     generation_result=repaired_result,
+                    connection_settings=connection_settings,
                     allow_repair=False,
                     conversation_context=conversation_context,
                     memory_context=memory_context,
@@ -562,6 +574,7 @@ class QueryPipelineService:
         self,
         question: str,
         attempt: dict,
+        connection_settings: PostgresConnectionSettings | None,
         conversation_context: list[ConversationMessage],
         memory_context: MemoryContext | None,
         dataset_adapter: DatasetAdapter,
@@ -594,6 +607,7 @@ class QueryPipelineService:
             question=question,
             retrieval_context=retrieval_context,
             generation_result=rewritten_generation,
+            connection_settings=connection_settings,
             allow_repair=False,
             conversation_context=conversation_context,
             memory_context=memory_context,

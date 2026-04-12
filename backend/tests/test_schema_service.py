@@ -6,7 +6,7 @@ def test_schema_service_normalizes_tables_columns_and_relationships(monkeypatch)
     monkeypatch.setattr(
         schema_service_module,
         "fetch_tables",
-        lambda settings=None: [
+        lambda settings=None, connection_settings=None, schema_allowlist=None: [
             {
                 "schema_name": "public",
                 "table_name": "customer",
@@ -22,7 +22,7 @@ def test_schema_service_normalizes_tables_columns_and_relationships(monkeypatch)
     monkeypatch.setattr(
         schema_service_module,
         "fetch_columns",
-        lambda settings=None: [
+        lambda settings=None, connection_settings=None, schema_allowlist=None: [
             {
                 "schema_name": "public",
                 "table_name": "customer",
@@ -58,7 +58,7 @@ def test_schema_service_normalizes_tables_columns_and_relationships(monkeypatch)
     monkeypatch.setattr(
         schema_service_module,
         "fetch_primary_keys",
-        lambda settings=None: [
+        lambda settings=None, connection_settings=None, schema_allowlist=None: [
             {
                 "schema_name": "public",
                 "table_name": "customer",
@@ -76,7 +76,7 @@ def test_schema_service_normalizes_tables_columns_and_relationships(monkeypatch)
     monkeypatch.setattr(
         schema_service_module,
         "fetch_foreign_keys",
-        lambda settings=None: [
+        lambda settings=None, connection_settings=None, schema_allowlist=None: [
             {
                 "constraint_name": "payment_customer_id_fkey",
                 "source_schema": "public",

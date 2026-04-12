@@ -46,7 +46,8 @@ def test_execute_sql_sets_local_timeout_via_set_config(monkeypatch) -> None:
     fake_connection = FakeConnection()
 
     @contextmanager
-    def fake_get_db_connection(_settings):
+    def fake_get_db_connection(_settings, connection_settings=None):
+        del connection_settings
         yield fake_connection
 
     monkeypatch.setattr(execution_module, "get_db_connection", fake_get_db_connection)

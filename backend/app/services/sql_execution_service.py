@@ -2,6 +2,7 @@ from psycopg import Error as PsycopgError
 
 from app.core.config import Settings, get_settings
 from app.db.connection import get_db_connection
+from app.schemas.data_source import PostgresConnectionSettings
 from app.schemas.execution import SQLExecutionError, SQLExecutionResult
 
 
@@ -9,7 +10,11 @@ class SQLExecutionService:
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or get_settings()
 
-    def execute_sql(self, validated_sql: str) -> SQLExecutionResult:
+    def execute_sql(
+        self,
+        validated_sql: str,
+        connection_settings: PostgresConnectionSettings | None = None,
+    ) -> SQLExecutionResult:
         sql = validated_sql.strip()
         if not sql:
             return SQLExecutionResult(
@@ -25,7 +30,10 @@ class SQLExecutionService:
         fetch_limit = self.settings.max_result_rows + 1
 
         try:
-            with get_db_connection(self.settings) as connection:
+            with get_db_connection(
+                self.settings,
+                connection_settings=connection_settings,
+            ) as connection:
                 connection.read_only = True
 
                 with connection.transaction():

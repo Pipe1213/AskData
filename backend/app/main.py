@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.routes_data_sources import router as data_sources_router
 from app.api.routes_examples import router as examples_router
 from app.api.routes_health import router as health_router
 from app.api.routes_query import router as query_router
@@ -11,6 +12,7 @@ from app.api.routes_schema import router as schema_router
 from app.api.routes_sessions import router as sessions_router
 from app.core.config import get_settings
 from app.core.logging import setup_logging
+from app.services.database_target_service import DatabaseTargetService
 from app.services.query_pipeline_service import QueryPipelineService
 from app.services.schema_service import SchemaService
 from app.services.session_service import SessionService
@@ -22,15 +24,18 @@ async def lifespan(app: FastAPI):
     setup_logging(settings.log_level)
     logger = logging.getLogger(__name__)
     schema_service = SchemaService(settings)
+    database_target_service = DatabaseTargetService(
+        schema_service=schema_service,
+        settings=settings,
+    )
     query_pipeline_service = QueryPipelineService(settings=settings)
     session_service = SessionService(settings=settings)
 
     logger.info("Starting %s in %s mode", settings.app_name, settings.app_env)
     app.state.schema_service = schema_service
+    app.state.database_target_service = database_target_service
     app.state.query_pipeline_service = query_pipeline_service
     app.state.session_service = session_service
-    app.state.schema_cache = None
-    app.state.schema_cache_error = None
 
     try:
         session_service.initialize_storage()
@@ -39,13 +44,12 @@ async def lifespan(app: FastAPI):
         logger.exception("Failed to initialize AskData app persistence storage")
 
     try:
-        app.state.schema_cache = schema_service.load_schema()
+        _, schema = database_target_service.refresh_schema_cache(None)
         logger.info(
             "Loaded schema cache with %s tables",
-            len(app.state.schema_cache.tables),
+            len(schema.tables),
         )
     except Exception as exc:
-        app.state.schema_cache_error = str(exc)
         logger.exception("Failed to load schema cache at startup")
 
     yield
@@ -67,6 +71,7 @@ def create_app() -> FastAPI:
         allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
         allow_headers=["*"],
     )
+    app.include_router(data_sources_router)
     app.include_router(examples_router)
     app.include_router(health_router)
     app.include_router(query_router)

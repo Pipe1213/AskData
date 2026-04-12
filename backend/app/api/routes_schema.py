@@ -1,5 +1,7 @@
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 
+from app.api.client_tokens import get_optional_client_token
+from app.core.exceptions import QueryPipelineError
 from app.db.metadata_models import DatabaseSchema
 from app.schemas.schema import (
     SchemaColumnResponse,
@@ -7,61 +9,55 @@ from app.schemas.schema import (
     SchemaOverviewResponse,
     SchemaTableResponse,
 )
+from app.services.database_target_service import DatabaseTargetService
 
 router = APIRouter(tags=["schema"])
 
 
 @router.get("/schema/overview", response_model=SchemaOverviewResponse)
-def get_schema_overview(request: Request) -> SchemaOverviewResponse:
-    schema_cache = getattr(request.app.state, "schema_cache", None)
-    schema_cache_error = getattr(request.app.state, "schema_cache_error", None)
-
-    if schema_cache is None:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={
-                "code": "schema_unavailable",
-                "message": "Schema metadata is not available.",
-                "details": {
-                    "stage": "startup",
-                    "error": schema_cache_error,
-                },
-            },
-        )
-
-    return _build_schema_overview_response(schema_cache)
-
-
-@router.post("/schema/reload")
-def reload_schema_cache(request: Request) -> dict[str, int | str]:
-    schema_service = getattr(request.app.state, "schema_service", None)
-    if schema_service is None:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={
-                "code": "schema_unavailable",
-                "message": "Schema service is not available.",
-                "details": {"stage": "runtime"},
-            },
-        )
-
+def get_schema_overview(
+    request: Request,
+    client_token: str | None = Depends(get_optional_client_token),
+) -> SchemaOverviewResponse:
+    target_service = _get_target_service(request)
     try:
-        schema_cache = schema_service.load_schema()
-    except Exception as exc:
-        request.app.state.schema_cache_error = str(exc)
-        request.app.state.schema_cache = None
+        _, schema = target_service.get_schema_for_active_target(client_token)
+    except QueryPipelineError as exc:
         raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            status_code=_map_error_code_to_status(exc.code),
             detail={
-                "code": "schema_reload_failed",
-                "message": "Schema metadata could not be reloaded.",
-                "details": {"stage": "runtime", "error": str(exc)},
+                "code": exc.code,
+                "message": exc.message,
+                "details": exc.to_error_payload()["details"],
             },
         ) from exc
 
-    request.app.state.schema_cache = schema_cache
-    request.app.state.schema_cache_error = None
-    return {"status": "ok", "table_count": len(schema_cache.tables)}
+    return _build_schema_overview_response(schema)
+
+
+@router.post("/schema/reload")
+def reload_schema_cache(
+    request: Request,
+    client_token: str | None = Depends(get_optional_client_token),
+) -> dict[str, int | str]:
+    target_service = _get_target_service(request)
+    try:
+        target, schema = target_service.refresh_schema_cache(client_token)
+    except QueryPipelineError as exc:
+        raise HTTPException(
+            status_code=_map_error_code_to_status(exc.code),
+            detail={
+                "code": exc.code,
+                "message": exc.message,
+                "details": exc.to_error_payload()["details"],
+            },
+        ) from exc
+
+    return {
+        "status": "ok",
+        "table_count": len(schema.tables),
+        "target_id": target.target_id,
+    }
 
 
 def _build_schema_overview_response(
@@ -97,3 +93,21 @@ def _build_schema_overview_response(
     ]
 
     return SchemaOverviewResponse(tables=tables)
+
+
+def _get_target_service(request: Request) -> DatabaseTargetService:
+    target_service = getattr(request.app.state, "database_target_service", None)
+    if target_service is None:
+        target_service = DatabaseTargetService()
+        request.app.state.database_target_service = target_service
+    return target_service
+
+
+def _map_error_code_to_status(code: str) -> int:
+    status_map = {
+        "schema_unavailable": status.HTTP_503_SERVICE_UNAVAILABLE,
+        "runtime_target_missing": status.HTTP_409_CONFLICT,
+        "schema_introspection_failed": status.HTTP_503_SERVICE_UNAVAILABLE,
+        "target_not_selected": status.HTTP_400_BAD_REQUEST,
+    }
+    return status_map.get(code, status.HTTP_500_INTERNAL_SERVER_ERROR)

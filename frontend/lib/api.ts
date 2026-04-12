@@ -1,8 +1,13 @@
 import type {
+  DataSourceActivationResponse,
+  DataSourcesResponse,
   ExampleQuestion,
   QueryErrorResponse,
   QueryRequest,
   QueryResponse,
+  RuntimeConnectionTestResponse,
+  RuntimePostgresConnectionInput,
+  RuntimeTargetActivationResponse,
   SchemaOverviewResponse,
   SessionDetail,
   SessionSummary,
@@ -34,6 +39,43 @@ export async function queryAskData(payload: QueryRequest): Promise<QueryResponse
 export async function fetchExampleQuestions(): Promise<ExampleQuestion[]> {
   const response = await requestJson<{ examples: string[] }>("/examples");
   return response.examples.map((question) => ({ question }));
+}
+
+export async function fetchDataSources(): Promise<DataSourcesResponse> {
+  return requestJson<DataSourcesResponse>("/data-sources");
+}
+
+export async function activateDemoDataSource(
+  targetId: "demo_pagila" | "demo_retail_ops",
+): Promise<DataSourceActivationResponse> {
+  return requestJson<DataSourceActivationResponse>("/data-sources/demo/activate", {
+    method: "POST",
+    body: JSON.stringify({ target_id: targetId }),
+  });
+}
+
+export async function testRuntimePostgresConnection(
+  payload: RuntimePostgresConnectionInput,
+): Promise<RuntimeConnectionTestResponse> {
+  return requestJson<RuntimeConnectionTestResponse>("/data-sources/runtime/test", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function activateRuntimePostgresConnection(
+  payload: RuntimePostgresConnectionInput,
+): Promise<RuntimeTargetActivationResponse> {
+  return requestJson<RuntimeTargetActivationResponse>("/data-sources/runtime/activate", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function disconnectRuntimeDataSource(): Promise<DataSourceActivationResponse> {
+  return requestJson<DataSourceActivationResponse>("/data-sources/runtime", {
+    method: "DELETE",
+  });
 }
 
 export async function fetchSchemaOverview(): Promise<SchemaOverviewResponse> {
@@ -80,9 +122,7 @@ export async function exportSessionTurnCsv(
   if (!response.ok) {
     const contentType = response.headers.get("content-type") ?? "";
     const data = contentType.includes("application/json") ? await response.json() : null;
-    const errorPayload = isQueryErrorResponse(data)
-      ? data
-      : buildFallbackErrorResponse(response.status);
+    const errorPayload = normalizeErrorPayload(data, response.status);
     throw new ApiError(errorPayload, response.status);
   }
 
@@ -102,9 +142,7 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
     : null;
 
   if (!response.ok) {
-    const errorPayload = isQueryErrorResponse(data)
-      ? data
-      : buildFallbackErrorResponse(response.status);
+    const errorPayload = normalizeErrorPayload(data, response.status);
     throw new ApiError(errorPayload, response.status);
   }
 
@@ -141,6 +179,79 @@ function isQueryErrorResponse(value: unknown): value is QueryErrorResponse {
     typeof candidate.error?.message === "string" &&
     Array.isArray(candidate.warnings)
   );
+}
+
+function normalizeErrorPayload(data: unknown, status: number): QueryErrorResponse {
+  if (isQueryErrorResponse(data)) {
+    return data;
+  }
+
+  if (data && typeof data === "object" && "error" in data) {
+    const candidate = data as { error?: { code?: unknown; message?: unknown; details?: unknown } };
+    if (
+      typeof candidate.error?.code === "string" &&
+      typeof candidate.error?.message === "string"
+    ) {
+      return {
+        error: {
+          code: candidate.error.code,
+          message: candidate.error.message,
+          details:
+            candidate.error.details && typeof candidate.error.details === "object"
+              ? (candidate.error.details as Record<string, unknown>)
+              : {},
+        },
+        warnings: [],
+        persisted: false,
+      };
+    }
+  }
+
+  if (data && typeof data === "object" && "detail" in data) {
+    const candidate = data as {
+      detail?:
+        | string
+        | {
+            code?: unknown;
+            message?: unknown;
+            details?: unknown;
+          };
+    };
+
+    if (typeof candidate.detail === "string") {
+      return {
+        error: {
+          code: "http_detail_error",
+          message: candidate.detail,
+          details: { status },
+        },
+        warnings: [],
+        persisted: false,
+      };
+    }
+
+    if (
+      candidate.detail &&
+      typeof candidate.detail === "object" &&
+      typeof candidate.detail.code === "string" &&
+      typeof candidate.detail.message === "string"
+    ) {
+      return {
+        error: {
+          code: candidate.detail.code,
+          message: candidate.detail.message,
+          details:
+            candidate.detail.details && typeof candidate.detail.details === "object"
+              ? (candidate.detail.details as Record<string, unknown>)
+              : {},
+        },
+        warnings: [],
+        persisted: false,
+      };
+    }
+  }
+
+  return buildFallbackErrorResponse(status);
 }
 
 function buildFallbackErrorResponse(status: number): QueryErrorResponse {

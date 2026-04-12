@@ -10,9 +10,15 @@ type LoadState = "idle" | "loading" | "success" | "error";
 
 type SchemaOverviewProps = {
   variant?: "page" | "embedded";
+  refreshKey?: string;
+  targetLabel?: string;
 };
 
-export function SchemaOverview({ variant = "page" }: SchemaOverviewProps) {
+export function SchemaOverview({
+  variant = "page",
+  refreshKey = "default",
+  targetLabel = "active",
+}: SchemaOverviewProps) {
   const [schemaOverview, setSchemaOverview] = useState<SchemaOverviewResponse | null>(null);
   const [loadState, setLoadState] = useState<LoadState>("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -52,7 +58,7 @@ export function SchemaOverview({ variant = "page" }: SchemaOverviewProps) {
     return () => {
       isActive = false;
     };
-  }, []);
+  }, [refreshKey]);
 
   const filteredTables = useMemo(() => {
     const tables = schemaOverview?.tables ?? [];
@@ -82,11 +88,11 @@ export function SchemaOverview({ variant = "page" }: SchemaOverviewProps) {
         <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
           <div>
             <div className="eyebrow">Live backend data</div>
-            <h2 className="section-title mt-4">Search the Pagila schema</h2>
+            <h2 className="section-title mt-4">Search the {targetLabel} schema</h2>
             <p className="mt-3 text-sm leading-6 text-muted">
               {variant === "embedded"
-                ? "This view is reading the real /schema/overview payload from the backend. Use search to narrow tables by name, description, or column names."
-                : "This page is now reading the real /schema/overview payload from the backend. Use search to narrow tables by name, description, or column names."}
+                ? "This view is reading the real /schema/overview payload for the active target. Use search to narrow tables by name, description, or column names."
+                : "This page is reading the real /schema/overview payload for the active target. Use search to narrow tables by name, description, or column names."}
             </p>
           </div>
           <div className="grid gap-3 sm:grid-cols-3 lg:w-[420px]">

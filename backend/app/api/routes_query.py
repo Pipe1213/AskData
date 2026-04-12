@@ -4,7 +4,7 @@ from fastapi.responses import JSONResponse
 from app.api.client_tokens import get_optional_client_token
 from app.core.exceptions import QueryPipelineError
 from app.schemas.query import DebugPayload, ErrorPayload, QueryErrorResponse, QueryRequest, QueryResponse
-from app.services.dataset_adapters import resolve_dataset_adapter
+from app.services.database_target_service import DatabaseTargetService
 from app.services.query_pipeline_service import QueryPipelineService
 from app.services.session_service import SessionService
 
@@ -19,34 +19,57 @@ def run_query(
 ) -> QueryResponse | JSONResponse:
     pipeline_service = _get_pipeline_service(request)
     session_service = _get_session_service(request)
-    schema_cache = getattr(request.app.state, "schema_cache", None)
+    target_service = _get_target_service(request)
     debug_mode = bool(getattr(getattr(pipeline_service, "settings", None), "debug_mode", False))
+    dataset_adapter_name = None
+
     try:
-        dataset_adapter_name = (
-            resolve_dataset_adapter(schema_cache).name
-            if schema_cache is not None
-            else None
+        active_target, schema = target_service.get_schema_for_active_target(client_token)
+    except QueryPipelineError as exc:
+        return JSONResponse(
+            status_code=_map_error_code_to_status(exc.code),
+            content=QueryErrorResponse(
+                error=ErrorPayload(**exc.to_error_payload()),
+                warnings=[],
+                persisted=False,
+            ).model_dump(),
         )
     except Exception:
-        dataset_adapter_name = None
+        active_target = None
+        schema = None
+    else:
+        try:
+            from app.services.dataset_adapters import resolve_dataset_adapter
+
+            dataset_adapter_name = resolve_dataset_adapter(schema).name if schema is not None else None
+        except Exception:
+            dataset_adapter_name = None
+
     memory_context = (
         session_service.get_memory_context(
             client_token=client_token,
             session_id=payload.session_id,
             question=payload.question.strip(),
+            target_id=active_target.target_id if active_target is not None else "demo_pagila",
         )
-        if client_token is not None and payload.question.strip()
+        if (
+            client_token is not None
+            and payload.question.strip()
+            and active_target is not None
+            and active_target.persistence_allowed
+        )
         else None
     )
 
     try:
         response = pipeline_service.run_query(
             question=payload.question,
-            schema=schema_cache,
+            schema=schema,
+            connection_settings=active_target.connection_settings if active_target is not None else None,
             conversation_context=payload.conversation_context,
             memory_context=memory_context,
         )
-        if client_token is None:
+        if client_token is None or active_target is None or not active_target.persistence_allowed:
             return response
 
         try:
@@ -54,6 +77,7 @@ def run_query(
                 client_token=client_token,
                 response=response,
                 session_id=payload.session_id,
+                target_id=active_target.target_id,
             )
         except ValueError as exc:
             raise QueryPipelineError(
@@ -94,20 +118,22 @@ def run_query(
         )
         if client_token is not None and payload.question.strip():
             try:
-                persisted_ref = session_service.persist_error(
-                    client_token=client_token,
-                    question=payload.question.strip(),
-                    error_payload=error_payload,
-                    session_id=payload.session_id,
-                )
-                error_payload = error_payload.model_copy(
-                    update={
-                        "session_id": persisted_ref.session_id,
-                        "turn_id": persisted_ref.turn_id,
-                        "persisted": True,
-                        "created_at": persisted_ref.created_at,
-                    }
-                )
+                if active_target is not None and active_target.persistence_allowed:
+                    persisted_ref = session_service.persist_error(
+                        client_token=client_token,
+                        question=payload.question.strip(),
+                        error_payload=error_payload,
+                        session_id=payload.session_id,
+                        target_id=active_target.target_id,
+                    )
+                    error_payload = error_payload.model_copy(
+                        update={
+                            "session_id": persisted_ref.session_id,
+                            "turn_id": persisted_ref.turn_id,
+                            "persisted": True,
+                            "created_at": persisted_ref.created_at,
+                        }
+                    )
             except ValueError:
                 if exc.code != "invalid_session":
                     status_code = status.HTTP_404_NOT_FOUND
@@ -159,11 +185,22 @@ def _get_session_service(request: Request) -> SessionService:
     return session_service
 
 
+def _get_target_service(request: Request) -> DatabaseTargetService:
+    target_service = getattr(request.app.state, "database_target_service", None)
+    if target_service is None:
+        target_service = DatabaseTargetService()
+        request.app.state.database_target_service = target_service
+
+    return target_service
+
+
 def _map_error_code_to_status(code: str) -> int:
     status_map = {
         "invalid_request": status.HTTP_400_BAD_REQUEST,
         "schema_unavailable": status.HTTP_503_SERVICE_UNAVAILABLE,
         "invalid_session": status.HTTP_404_NOT_FOUND,
+        "runtime_target_missing": status.HTTP_409_CONFLICT,
+        "target_not_selected": status.HTTP_400_BAD_REQUEST,
         "sql_generation_failed": status.HTTP_502_BAD_GATEWAY,
         "unsafe_sql": status.HTTP_400_BAD_REQUEST,
         "sql_validation_failed": status.HTTP_400_BAD_REQUEST,
