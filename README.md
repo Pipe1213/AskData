@@ -1,5 +1,7 @@
 # AskData
 
+> **Status:** in progress. Core pipeline, demo datasets and tests work; benchmark results and a hosted demo are next.
+
 AskData is a web application for asking questions about a PostgreSQL database in plain language.
 
 The app turns a question into a read-only SQL query, runs it against PostgreSQL, and returns:

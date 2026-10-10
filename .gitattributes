@@ -1,0 +1,2 @@
+# Demo database dumps are data, not source code: keep them out of GitHub's language stats
+demo_data/seed/*.sql linguist-vendored
