@@ -1,0 +1,1482 @@
+{
+  "version": 1,
+  "datasets": [
+    "pagila",
+    "retail_ops"
+  ],
+  "items": [
+    {
+      "id": "pg-dev-01",
+      "dataset": "pagila",
+      "split": "dev",
+      "kind": "answerable",
+      "category": "ranking",
+      "question": "Which 10 customers spent the most in total?",
+      "conversation_context": [],
+      "gold_sql": [
+        "SELECT c.customer_id, c.first_name, c.last_name,\n       c.first_name || ' ' || c.last_name AS customer_name,\n       SUM(p.amount) AS total_spent\nFROM customer c\nJOIN payment p ON p.customer_id = c.customer_id\nGROUP BY c.customer_id\nORDER BY total_spent DESC, c.customer_id\nLIMIT 10"
+      ],
+      "match": {
+        "required": [
+          [
+            "customer_id",
+            "customer_name",
+            "first_name",
+            "last_name"
+          ],
+          [
+            "total_spent"
+          ]
+        ],
+        "ordered_column": "total_spent",
+        "prefix_ok": false,
+        "expect_empty": false
+      },
+      "notes": "The README screenshot answered this wrongly (Marion, $64.87). True top: Karl Seal, $221.55."
+    },
+    {
+      "id": "pg-dev-02",
+      "dataset": "pagila",
+      "split": "dev",
+      "kind": "answerable",
+      "category": "ranking",
+      "question": "What are the top 10 film categories by total revenue?",
+      "conversation_context": [],
+      "gold_sql": [
+        "SELECT cat.category_id, cat.name AS category, SUM(p.amount) AS revenue\nFROM payment p\nJOIN rental r ON r.rental_id = p.rental_id\nJOIN inventory i ON i.inventory_id = r.inventory_id\nJOIN film_category fc ON fc.film_id = i.film_id\nJOIN category cat ON cat.category_id = fc.category_id\nGROUP BY cat.category_id\nORDER BY revenue DESC\nLIMIT 10"
+      ],
+      "match": {
+        "required": [
+          [
+            "category",
+            "category_id"
+          ],
+          [
+            "revenue"
+          ]
+        ],
+        "ordered_column": "revenue",
+        "prefix_ok": false,
+        "expect_empty": false
+      },
+      "notes": ""
+    },
+    {
+      "id": "pg-dev-03",
+      "dataset": "pagila",
+      "split": "dev",
+      "kind": "answerable",
+      "category": "aggregation",
+      "question": "How much revenue did each staff member process?",
+      "conversation_context": [],
+      "gold_sql": [
+        "SELECT s.staff_id, s.first_name, s.last_name, s.first_name || ' ' || s.last_name AS staff_name,\n       SUM(p.amount) AS revenue\nFROM payment p\nJOIN staff s ON s.staff_id = p.staff_id\nGROUP BY s.staff_id"
+      ],
+      "match": {
+        "required": [
+          [
+            "staff_id",
+            "staff_name",
+            "first_name"
+          ],
+          [
+            "revenue"
+          ]
+        ],
+        "ordered_column": null,
+        "prefix_ok": false,
+        "expect_empty": false
+      },
+      "notes": ""
+    },
+    {
+      "id": "pg-dev-04",
+      "dataset": "pagila",
+      "split": "dev",
+      "kind": "answerable",
+      "category": "trend",
+      "question": "How many rentals happened each month?",
+      "conversation_context": [],
+      "gold_sql": [
+        "SELECT date_trunc('month', rental_date)::date AS month, COUNT(*) AS rentals\nFROM rental\nGROUP BY 1\nORDER BY 1",
+        "SELECT m::date AS month, COUNT(r.rental_id) AS rentals\nFROM generate_series((SELECT date_trunc('month', MIN(rental_date)) FROM rental),\n                     (SELECT date_trunc('month', MAX(rental_date)) FROM rental),\n                     interval '1 month') AS m\nLEFT JOIN rental r ON date_trunc('month', r.rental_date) = m\nGROUP BY m\nORDER BY m"
+      ],
+      "match": {
+        "required": [
+          [
+            "rentals"
+          ]
+        ],
+        "ordered_column": "rentals",
+        "prefix_ok": false,
+        "expect_empty": false
+      },
+      "notes": "Rentals run Feb–Aug 2022 with no rentals in Mar–Apr; listing those months as 0 is also accepted."
+    },
+    {
+      "id": "pg-dev-05",
+      "dataset": "pagila",
+      "split": "dev",
+      "kind": "answerable",
+      "category": "trend",
+      "question": "What is the monthly trend of rentals this year?",
+      "conversation_context": [],
+      "gold_sql": [
+        "SELECT date_trunc('month', rental_date)::date AS month, COUNT(*) AS rentals\nFROM rental\nGROUP BY 1\nORDER BY 1",
+        "SELECT m::date AS month, COUNT(r.rental_id) AS rentals\nFROM generate_series((SELECT date_trunc('month', MIN(rental_date)) FROM rental),\n                     (SELECT date_trunc('month', MAX(rental_date)) FROM rental),\n                     interval '1 month') AS m\nLEFT JOIN rental r ON date_trunc('month', r.rental_date) = m\nGROUP BY m\nORDER BY m"
+      ],
+      "match": {
+        "required": [
+          [
+            "rentals"
+          ]
+        ],
+        "ordered_column": "rentals",
+        "prefix_ok": false,
+        "expect_empty": false
+      },
+      "notes": "'This year' (2026) has no data; the latest year in the data is 2022. Expected: answer for 2022 AND state that assumption, or ask."
+    },
+    {
+      "id": "pg-dev-06",
+      "dataset": "pagila",
+      "split": "dev",
+      "kind": "schema_lookup",
+      "category": "schema_lookup",
+      "question": "Which tables contain payment information?",
+      "expected_mentions": [
+        "payment"
+      ],
+      "conversation_context": []
+    },
+    {
+      "id": "pg-dev-07",
+      "dataset": "pagila",
+      "split": "dev",
+      "kind": "ambiguous",
+      "category": "comparison",
+      "question": "Compare average rental duration by film category.",
+      "interpretations": [
+        {
+          "label": "Allowed rental period (film.rental_duration)",
+          "gold_sql": [
+            "SELECT cat.name AS category, AVG(f.rental_duration) AS avg_days\nFROM film f\nJOIN film_category fc ON fc.film_id = f.film_id\nJOIN category cat ON cat.category_id = fc.category_id\nGROUP BY cat.name"
+          ],
+          "match": {
+            "required": [
+              [
+                "category"
+              ],
+              [
+                "avg_days"
+              ]
+            ],
+            "ordered_column": null,
+            "prefix_ok": false,
+            "expect_empty": false
+          }
+        },
+        {
+          "label": "Actual time kept (return_date - rental_date)",
+          "gold_sql": [
+            "SELECT cat.name AS category,\n       AVG(EXTRACT(EPOCH FROM (r.return_date - r.rental_date)) / 86400) AS avg_days\nFROM rental r\nJOIN inventory i ON i.inventory_id = r.inventory_id\nJOIN film_category fc ON fc.film_id = i.film_id\nJOIN category cat ON cat.category_id = fc.category_id\nWHERE r.return_date IS NOT NULL\nGROUP BY cat.name"
+          ],
+          "match": {
+            "required": [
+              [
+                "category"
+              ],
+              [
+                "avg_days"
+              ]
+            ],
+            "ordered_column": null,
+            "prefix_ok": false,
+            "expect_empty": false
+          }
+        }
+      ],
+      "notes": "'Rental duration' can mean the allowed period on the film or how long customers actually kept it.",
+      "conversation_context": []
+    },
+    {
+      "id": "pg-dev-08",
+      "dataset": "pagila",
+      "split": "dev",
+      "kind": "answerable",
+      "category": "follow_up",
+      "question": "Now show only the top 5",
+      "conversation_context": [
+        {
+          "role": "user",
+          "content": "Which 10 customers spent the most in total?"
+        },
+        {
+          "role": "assistant",
+          "content": "The top customers by total payment amount were returned in descending order."
+        }
+      ],
+      "gold_sql": [
+        "SELECT c.customer_id, c.first_name, c.last_name,\n       c.first_name || ' ' || c.last_name AS customer_name,\n       SUM(p.amount) AS total_spent\nFROM customer c\nJOIN payment p ON p.customer_id = c.customer_id\nGROUP BY c.customer_id\nORDER BY total_spent DESC, c.customer_id\nLIMIT 5"
+      ],
+      "match": {
+        "required": [
+          [
+            "customer_id",
+            "customer_name",
+            "first_name",
+            "last_name"
+          ],
+          [
+            "total_spent"
+          ]
+        ],
+        "ordered_column": "total_spent",
+        "prefix_ok": false,
+        "expect_empty": false
+      },
+      "notes": ""
+    },
+    {
+      "id": "pg-dev-09",
+      "dataset": "pagila",
+      "split": "dev",
+      "kind": "answerable",
+      "category": "follow_up",
+      "question": "Group this by month",
+      "conversation_context": [
+        {
+          "role": "user",
+          "content": "How much revenue did each staff member process?"
+        },
+        {
+          "role": "assistant",
+          "content": "The answer reported revenue totals per staff member."
+        }
+      ],
+      "gold_sql": [
+        "SELECT s.staff_id, s.first_name || ' ' || s.last_name AS staff_name,\n       date_trunc('month', p.payment_date)::date AS month, SUM(p.amount) AS revenue\nFROM payment p\nJOIN staff s ON s.staff_id = p.staff_id\nGROUP BY s.staff_id, staff_name, month"
+      ],
+      "match": {
+        "required": [
+          [
+            "staff_id",
+            "staff_name",
+            "first_name"
+          ],
+          [
+            "revenue"
+          ]
+        ],
+        "ordered_column": null,
+        "prefix_ok": false,
+        "expect_empty": false
+      },
+      "notes": ""
+    },
+    {
+      "id": "pg-dev-10",
+      "dataset": "pagila",
+      "split": "dev",
+      "kind": "answerable",
+      "category": "no_result",
+      "question": "Show rentals from the year 1990.",
+      "conversation_context": [],
+      "gold_sql": [
+        "SELECT rental_id FROM rental WHERE EXTRACT(YEAR FROM rental_date) = 1990"
+      ],
+      "match": {
+        "required": [],
+        "ordered_column": null,
+        "prefix_ok": false,
+        "expect_empty": true
+      },
+      "notes": "Correct answer is 'no rentals in 1990' (data covers 2022)."
+    },
+    {
+      "id": "pg-ho-01",
+      "dataset": "pagila",
+      "split": "heldout",
+      "kind": "answerable",
+      "category": "aggregation",
+      "question": "How many films are there in each rating?",
+      "conversation_context": [],
+      "gold_sql": [
+        "SELECT rating::text AS rating, COUNT(*) AS films FROM film GROUP BY 1"
+      ],
+      "match": {
+        "required": [
+          [
+            "rating"
+          ],
+          [
+            "films"
+          ]
+        ],
+        "ordered_column": null,
+        "prefix_ok": false,
+        "expect_empty": false
+      },
+      "notes": ""
+    },
+    {
+      "id": "pg-ho-02",
+      "dataset": "pagila",
+      "split": "heldout",
+      "kind": "answerable",
+      "category": "ranking",
+      "question": "Which 5 actors appear in the most films?",
+      "conversation_context": [],
+      "gold_sql": [
+        "SELECT a.actor_id, a.first_name, a.last_name, a.first_name || ' ' || a.last_name AS actor_name,\n       COUNT(*) AS films\nFROM actor a\nJOIN film_actor fa ON fa.actor_id = a.actor_id\nGROUP BY a.actor_id\nORDER BY films DESC, a.actor_id\nLIMIT 5"
+      ],
+      "match": {
+        "required": [
+          [
+            "actor_id",
+            "actor_name",
+            "first_name",
+            "last_name"
+          ],
+          [
+            "films"
+          ]
+        ],
+        "ordered_column": "films",
+        "prefix_ok": false,
+        "expect_empty": false
+      },
+      "notes": ""
+    },
+    {
+      "id": "pg-ho-03",
+      "dataset": "pagila",
+      "split": "heldout",
+      "kind": "answerable",
+      "category": "aggregation",
+      "question": "What is the average rental rate in each film category?",
+      "conversation_context": [],
+      "gold_sql": [
+        "SELECT cat.name AS category, AVG(f.rental_rate) AS avg_rental_rate\nFROM film f\nJOIN film_category fc ON fc.film_id = f.film_id\nJOIN category cat ON cat.category_id = fc.category_id\nGROUP BY cat.name"
+      ],
+      "match": {
+        "required": [
+          [
+            "category"
+          ],
+          [
+            "avg_rental_rate"
+          ]
+        ],
+        "ordered_column": null,
+        "prefix_ok": false,
+        "expect_empty": false
+      },
+      "notes": ""
+    },
+    {
+      "id": "pg-ho-04",
+      "dataset": "pagila",
+      "split": "heldout",
+      "kind": "answerable",
+      "category": "comparison",
+      "question": "Which store had more rentals in July 2022?",
+      "conversation_context": [],
+      "gold_sql": [
+        "SELECT i.store_id, COUNT(*) AS rentals\nFROM rental r\nJOIN inventory i ON i.inventory_id = r.inventory_id\nWHERE r.rental_date >= '2022-07-01' AND r.rental_date < '2022-08-01'\nGROUP BY i.store_id\nORDER BY rentals DESC",
+        "SELECT st.store_id, COUNT(*) AS rentals\nFROM rental r\nJOIN staff st ON st.staff_id = r.staff_id\nWHERE r.rental_date >= '2022-07-01' AND r.rental_date < '2022-08-01'\nGROUP BY st.store_id\nORDER BY rentals DESC"
+      ],
+      "match": {
+        "required": [
+          [
+            "store_id"
+          ],
+          [
+            "rentals"
+          ]
+        ],
+        "ordered_column": "rentals",
+        "prefix_ok": true,
+        "expect_empty": false
+      },
+      "notes": "Store can come from the inventory copy or from the staff member who handled the rental; both accepted."
+    },
+    {
+      "id": "pg-ho-05",
+      "dataset": "pagila",
+      "split": "heldout",
+      "kind": "answerable",
+      "category": "aggregation",
+      "question": "How many rentals have not been returned yet?",
+      "conversation_context": [],
+      "gold_sql": [
+        "SELECT COUNT(*) AS unreturned FROM rental WHERE return_date IS NULL"
+      ],
+      "match": {
+        "required": [
+          [
+            "unreturned"
+          ]
+        ],
+        "ordered_column": null,
+        "prefix_ok": false,
+        "expect_empty": false
+      },
+      "notes": ""
+    },
+    {
+      "id": "pg-ho-06",
+      "dataset": "pagila",
+      "split": "heldout",
+      "kind": "answerable",
+      "category": "ranking",
+      "question": "Which 10 films were rented the most times?",
+      "conversation_context": [],
+      "gold_sql": [
+        "SELECT f.film_id, f.title, COUNT(*) AS rentals\nFROM rental r\nJOIN inventory i ON i.inventory_id = r.inventory_id\nJOIN film f ON f.film_id = i.film_id\nGROUP BY f.film_id\nORDER BY rentals DESC, f.film_id\nLIMIT 10"
+      ],
+      "match": {
+        "required": [
+          [
+            "film_id",
+            "title"
+          ],
+          [
+            "rentals"
+          ]
+        ],
+        "ordered_column": "rentals",
+        "prefix_ok": false,
+        "expect_empty": false
+      },
+      "notes": ""
+    },
+    {
+      "id": "pg-ho-07",
+      "dataset": "pagila",
+      "split": "heldout",
+      "kind": "answerable",
+      "category": "aggregation",
+      "question": "What was the total amount paid in March 2022?",
+      "conversation_context": [],
+      "gold_sql": [
+        "SELECT SUM(amount) AS total_paid\nFROM payment\nWHERE payment_date >= '2022-03-01' AND payment_date < '2022-04-01'"
+      ],
+      "match": {
+        "required": [
+          [
+            "total_paid"
+          ]
+        ],
+        "ordered_column": null,
+        "prefix_ok": false,
+        "expect_empty": false
+      },
+      "notes": ""
+    },
+    {
+      "id": "pg-ho-08",
+      "dataset": "pagila",
+      "split": "heldout",
+      "kind": "answerable",
+      "category": "ranking",
+      "question": "Which country has the most customers?",
+      "conversation_context": [],
+      "gold_sql": [
+        "SELECT co.country, COUNT(*) AS customers\nFROM customer c\nJOIN address a ON a.address_id = c.address_id\nJOIN city ci ON ci.city_id = a.city_id\nJOIN country co ON co.country_id = ci.country_id\nGROUP BY co.country\nORDER BY customers DESC"
+      ],
+      "match": {
+        "required": [
+          [
+            "country"
+          ],
+          [
+            "customers"
+          ]
+        ],
+        "ordered_column": "customers",
+        "prefix_ok": true,
+        "expect_empty": false
+      },
+      "notes": ""
+    },
+    {
+      "id": "pg-ho-09",
+      "dataset": "pagila",
+      "split": "heldout",
+      "kind": "answerable",
+      "category": "aggregation",
+      "question": "On average, how much has each customer spent in total?",
+      "conversation_context": [],
+      "gold_sql": [
+        "SELECT AVG(total) AS avg_total_spent\nFROM (SELECT customer_id, SUM(amount) AS total FROM payment GROUP BY customer_id) t"
+      ],
+      "match": {
+        "required": [
+          [
+            "avg_total_spent"
+          ]
+        ],
+        "ordered_column": null,
+        "prefix_ok": false,
+        "expect_empty": false
+      },
+      "notes": ""
+    },
+    {
+      "id": "pg-ho-10",
+      "dataset": "pagila",
+      "split": "heldout",
+      "kind": "answerable",
+      "category": "no_result",
+      "question": "Which customers have never rented a film?",
+      "conversation_context": [],
+      "gold_sql": [
+        "SELECT c.customer_id\nFROM customer c\nWHERE NOT EXISTS (SELECT 1 FROM rental r WHERE r.customer_id = c.customer_id)"
+      ],
+      "match": {
+        "required": [],
+        "ordered_column": null,
+        "prefix_ok": false,
+        "expect_empty": true
+      },
+      "notes": "Every customer has rented at least once; correct answer is 'none'."
+    },
+    {
+      "id": "pg-ho-11",
+      "dataset": "pagila",
+      "split": "heldout",
+      "kind": "ambiguous",
+      "category": "vague_metric",
+      "question": "Who are our best customers?",
+      "interpretations": [
+        {
+          "label": "Spent the most",
+          "gold_sql": [
+            "SELECT c.customer_id, c.first_name, c.last_name,\n       c.first_name || ' ' || c.last_name AS customer_name,\n       SUM(p.amount) AS total_spent\nFROM customer c\nJOIN payment p ON p.customer_id = c.customer_id\nGROUP BY c.customer_id\nORDER BY total_spent DESC, c.customer_id\nLIMIT 599"
+          ],
+          "match": {
+            "required": [
+              [
+                "customer_id",
+                "customer_name",
+                "first_name",
+                "last_name"
+              ],
+              [
+                "total_spent"
+              ]
+            ],
+            "ordered_column": "total_spent",
+            "prefix_ok": true,
+            "expect_empty": false
+          }
+        },
+        {
+          "label": "Rented the most films",
+          "gold_sql": [
+            "SELECT c.customer_id, c.first_name || ' ' || c.last_name AS customer_name,\n       COUNT(*) AS rentals\nFROM customer c\nJOIN rental r ON r.customer_id = c.customer_id\nGROUP BY c.customer_id\nORDER BY rentals DESC, c.customer_id"
+          ],
+          "match": {
+            "required": [
+              [
+                "customer_id",
+                "customer_name"
+              ],
+              [
+                "rentals"
+              ]
+            ],
+            "ordered_column": "rentals",
+            "prefix_ok": true,
+            "expect_empty": false
+          }
+        }
+      ],
+      "notes": "",
+      "conversation_context": []
+    },
+    {
+      "id": "pg-ho-12",
+      "dataset": "pagila",
+      "split": "heldout",
+      "kind": "ambiguous",
+      "category": "vague_metric",
+      "question": "Which films are the most popular?",
+      "interpretations": [
+        {
+          "label": "Most rentals",
+          "gold_sql": [
+            "SELECT f.film_id, f.title, COUNT(*) AS rentals\nFROM rental r\nJOIN inventory i ON i.inventory_id = r.inventory_id\nJOIN film f ON f.film_id = i.film_id\nGROUP BY f.film_id\nORDER BY rentals DESC, f.film_id"
+          ],
+          "match": {
+            "required": [
+              [
+                "film_id",
+                "title"
+              ],
+              [
+                "rentals"
+              ]
+            ],
+            "ordered_column": "rentals",
+            "prefix_ok": true,
+            "expect_empty": false
+          }
+        },
+        {
+          "label": "Most revenue",
+          "gold_sql": [
+            "SELECT f.film_id, f.title, SUM(p.amount) AS revenue\nFROM payment p\nJOIN rental r ON r.rental_id = p.rental_id\nJOIN inventory i ON i.inventory_id = r.inventory_id\nJOIN film f ON f.film_id = i.film_id\nGROUP BY f.film_id\nORDER BY revenue DESC, f.film_id"
+          ],
+          "match": {
+            "required": [
+              [
+                "film_id",
+                "title"
+              ],
+              [
+                "revenue"
+              ]
+            ],
+            "ordered_column": "revenue",
+            "prefix_ok": true,
+            "expect_empty": false
+          }
+        }
+      ],
+      "notes": "",
+      "conversation_context": []
+    },
+    {
+      "id": "pg-ho-13",
+      "dataset": "pagila",
+      "split": "heldout",
+      "kind": "ambiguous",
+      "category": "vague_metric",
+      "question": "Which store is bigger?",
+      "interpretations": [
+        {
+          "label": "More customers",
+          "gold_sql": [
+            "SELECT store_id, COUNT(*) AS customers FROM customer GROUP BY store_id ORDER BY customers DESC"
+          ],
+          "match": {
+            "required": [
+              [
+                "store_id"
+              ],
+              [
+                "customers"
+              ]
+            ],
+            "ordered_column": "customers",
+            "prefix_ok": true,
+            "expect_empty": false
+          }
+        },
+        {
+          "label": "More film copies",
+          "gold_sql": [
+            "SELECT store_id, COUNT(*) AS copies FROM inventory GROUP BY store_id ORDER BY copies DESC"
+          ],
+          "match": {
+            "required": [
+              [
+                "store_id"
+              ],
+              [
+                "copies"
+              ]
+            ],
+            "ordered_column": "copies",
+            "prefix_ok": true,
+            "expect_empty": false
+          }
+        },
+        {
+          "label": "More revenue",
+          "gold_sql": [
+            "SELECT st.store_id, SUM(p.amount) AS revenue\nFROM payment p JOIN staff st ON st.staff_id = p.staff_id\nGROUP BY st.store_id ORDER BY revenue DESC"
+          ],
+          "match": {
+            "required": [
+              [
+                "store_id"
+              ],
+              [
+                "revenue"
+              ]
+            ],
+            "ordered_column": "revenue",
+            "prefix_ok": true,
+            "expect_empty": false
+          }
+        }
+      ],
+      "notes": "",
+      "conversation_context": []
+    },
+    {
+      "id": "pg-ho-14",
+      "dataset": "pagila",
+      "split": "heldout",
+      "kind": "unanswerable",
+      "category": "unanswerable",
+      "question": "What is the profit margin for each film?",
+      "reason": "Only what customers paid is recorded; there is no purchase or licence cost per film. replacement_cost is a penalty value for lost copies, not a cost of sale.",
+      "suggested_alternative": "Which films earned the most revenue?",
+      "conversation_context": []
+    },
+    {
+      "id": "pg-ho-15",
+      "dataset": "pagila",
+      "split": "heldout",
+      "kind": "unanswerable",
+      "category": "unanswerable",
+      "question": "What is the average age of our customers?",
+      "reason": "The customer table has no birth date or age.",
+      "suggested_alternative": "How many customers does each store have?",
+      "conversation_context": []
+    },
+    {
+      "id": "pg-ho-16",
+      "dataset": "pagila",
+      "split": "heldout",
+      "kind": "unanswerable",
+      "category": "unanswerable",
+      "question": "How many customers gave a film a 5-star rating?",
+      "reason": "There are no customer reviews or star ratings; film.rating is the MPAA age rating (G, PG, …).",
+      "suggested_alternative": "How many films are there in each rating (G, PG, PG-13, R, NC-17)?",
+      "conversation_context": []
+    },
+    {
+      "id": "rt-dev-01",
+      "dataset": "retail_ops",
+      "split": "dev",
+      "kind": "answerable",
+      "category": "ranking",
+      "question": "Which 10 customers generated the most revenue?",
+      "conversation_context": [],
+      "gold_sql": [
+        "SELECT c.customer_id, c.full_name AS customer_name, SUM(p.amount) AS revenue\nFROM customers c\nJOIN orders o ON o.customer_id = c.customer_id\nJOIN payments p ON p.order_id = o.order_id\nGROUP BY c.customer_id\nORDER BY revenue DESC, c.customer_id\nLIMIT 10"
+      ],
+      "match": {
+        "required": [
+          [
+            "customer_id",
+            "customer_name"
+          ],
+          [
+            "revenue"
+          ]
+        ],
+        "ordered_column": "revenue",
+        "prefix_ok": false,
+        "expect_empty": false
+      },
+      "notes": "Revenue = payments.amount (equals order-item value net of discounts for non-cancelled orders). Counting cancelled orders is wrong."
+    },
+    {
+      "id": "rt-dev-02",
+      "dataset": "retail_ops",
+      "split": "dev",
+      "kind": "answerable",
+      "category": "ranking",
+      "question": "What are the top 5 product categories by revenue?",
+      "conversation_context": [],
+      "gold_sql": [
+        "SELECT cat.category_id, cat.category_name AS category, SUM(oi.quantity * oi.unit_price - oi.discount_amount) AS revenue\nFROM order_items oi\nJOIN orders o ON o.order_id = oi.order_id\nJOIN products pr ON pr.product_id = oi.product_id\nJOIN categories cat ON cat.category_id = pr.category_id\nWHERE o.order_status <> 'cancelled'\nGROUP BY cat.category_id\nORDER BY revenue DESC\nLIMIT 5",
+        "SELECT cat.category_id, cat.category_name AS category, SUM(oi.quantity * oi.unit_price) AS revenue\nFROM order_items oi\nJOIN orders o ON o.order_id = oi.order_id\nJOIN products pr ON pr.product_id = oi.product_id\nJOIN categories cat ON cat.category_id = pr.category_id\nWHERE o.order_status <> 'cancelled'\nGROUP BY cat.category_id\nORDER BY revenue DESC\nLIMIT 5"
+      ],
+      "match": {
+        "required": [
+          [
+            "category",
+            "category_id"
+          ],
+          [
+            "revenue"
+          ]
+        ],
+        "ordered_column": "revenue",
+        "prefix_ok": false,
+        "expect_empty": false
+      },
+      "notes": "Net (after discounts) and gross item value both accepted; cancelled orders must be excluded."
+    },
+    {
+      "id": "rt-dev-03",
+      "dataset": "retail_ops",
+      "split": "dev",
+      "kind": "answerable",
+      "category": "trend",
+      "question": "How did monthly revenue change by sales channel?",
+      "conversation_context": [],
+      "gold_sql": [
+        "SELECT date_trunc('month', o.ordered_at)::date AS month, o.order_channel AS channel, SUM(p.amount) AS revenue\nFROM orders o\nJOIN payments p ON p.order_id = o.order_id\nGROUP BY 1, 2",
+        "SELECT date_trunc('month', p.paid_at)::date AS month, o.order_channel AS channel, SUM(p.amount) AS revenue\nFROM orders o\nJOIN payments p ON p.order_id = o.order_id\nGROUP BY 1, 2"
+      ],
+      "match": {
+        "required": [
+          [
+            "channel"
+          ],
+          [
+            "revenue"
+          ]
+        ],
+        "ordered_column": null,
+        "prefix_ok": false,
+        "expect_empty": false
+      },
+      "notes": "Month by order date or by payment date both accepted."
+    },
+    {
+      "id": "rt-dev-04",
+      "dataset": "retail_ops",
+      "split": "dev",
+      "kind": "ambiguous",
+      "category": "comparison",
+      "question": "Compare delivered order revenue by region.",
+      "interpretations": [
+        {
+          "label": "Region of the store",
+          "gold_sql": [
+            "SELECT rg.region_name AS region, SUM(p.amount) AS revenue\nFROM orders o\nJOIN payments p ON p.order_id = o.order_id\nJOIN stores s ON s.store_id = o.store_id\nJOIN regions rg ON rg.region_id = s.region_id\nWHERE o.order_status = 'delivered'\nGROUP BY rg.region_name"
+          ],
+          "match": {
+            "required": [
+              [
+                "region"
+              ],
+              [
+                "revenue"
+              ]
+            ],
+            "ordered_column": null,
+            "prefix_ok": false,
+            "expect_empty": false
+          }
+        },
+        {
+          "label": "Region of the customer",
+          "gold_sql": [
+            "SELECT rg.region_name AS region, SUM(p.amount) AS revenue\nFROM orders o\nJOIN payments p ON p.order_id = o.order_id\nJOIN customers c ON c.customer_id = o.customer_id\nJOIN regions rg ON rg.region_id = c.region_id\nWHERE o.order_status = 'delivered'\nGROUP BY rg.region_name"
+          ],
+          "match": {
+            "required": [
+              [
+                "region"
+              ],
+              [
+                "revenue"
+              ]
+            ],
+            "ordered_column": null,
+            "prefix_ok": false,
+            "expect_empty": false
+          }
+        }
+      ],
+      "notes": "Orders have a store region and a customer region.",
+      "conversation_context": []
+    },
+    {
+      "id": "rt-dev-05",
+      "dataset": "retail_ops",
+      "split": "dev",
+      "kind": "answerable",
+      "category": "ranking",
+      "question": "Which brands have the highest return amount?",
+      "conversation_context": [],
+      "gold_sql": [
+        "SELECT b.brand_id, b.brand_name AS brand, SUM(rr.refund_amount) AS refund_total\nFROM return_requests rr\nJOIN order_items oi ON oi.order_item_id = rr.order_item_id\nJOIN products pr ON pr.product_id = oi.product_id\nJOIN brands b ON b.brand_id = pr.brand_id\nGROUP BY b.brand_id\nORDER BY refund_total DESC"
+      ],
+      "match": {
+        "required": [
+          [
+            "brand",
+            "brand_id"
+          ],
+          [
+            "refund_total"
+          ]
+        ],
+        "ordered_column": "refund_total",
+        "prefix_ok": true,
+        "expect_empty": false
+      },
+      "notes": ""
+    },
+    {
+      "id": "rt-dev-06",
+      "dataset": "retail_ops",
+      "split": "dev",
+      "kind": "answerable",
+      "category": "ranking",
+      "question": "Which sales reps handled the most delivered orders?",
+      "conversation_context": [],
+      "gold_sql": [
+        "SELECT sr.sales_rep_id, sr.full_name AS rep_name, COUNT(*) AS delivered_orders\nFROM orders o\nJOIN sales_reps sr ON sr.sales_rep_id = o.sales_rep_id\nWHERE o.order_status = 'delivered'\nGROUP BY sr.sales_rep_id\nORDER BY delivered_orders DESC, sr.sales_rep_id"
+      ],
+      "match": {
+        "required": [
+          [
+            "sales_rep_id",
+            "rep_name"
+          ],
+          [
+            "delivered_orders"
+          ]
+        ],
+        "ordered_column": "delivered_orders",
+        "prefix_ok": true,
+        "expect_empty": false
+      },
+      "notes": ""
+    },
+    {
+      "id": "rt-dev-07",
+      "dataset": "retail_ops",
+      "split": "dev",
+      "kind": "schema_lookup",
+      "category": "schema_lookup",
+      "question": "Which tables contain shipment information?",
+      "expected_mentions": [
+        "shipments"
+      ],
+      "conversation_context": []
+    },
+    {
+      "id": "rt-dev-08",
+      "dataset": "retail_ops",
+      "split": "dev",
+      "kind": "answerable",
+      "category": "follow_up",
+      "question": "Now show only the top 5",
+      "conversation_context": [
+        {
+          "role": "user",
+          "content": "Which 10 customers generated the most revenue?"
+        },
+        {
+          "role": "assistant",
+          "content": "AskData ranked customers by total revenue across the returned period."
+        }
+      ],
+      "gold_sql": [
+        "SELECT c.customer_id, c.full_name AS customer_name, SUM(p.amount) AS revenue\nFROM customers c\nJOIN orders o ON o.customer_id = c.customer_id\nJOIN payments p ON p.order_id = o.order_id\nGROUP BY c.customer_id\nORDER BY revenue DESC, c.customer_id\nLIMIT 5"
+      ],
+      "match": {
+        "required": [
+          [
+            "customer_id",
+            "customer_name"
+          ],
+          [
+            "revenue"
+          ]
+        ],
+        "ordered_column": "revenue",
+        "prefix_ok": false,
+        "expect_empty": false
+      },
+      "notes": ""
+    },
+    {
+      "id": "rt-dev-09",
+      "dataset": "retail_ops",
+      "split": "dev",
+      "kind": "answerable",
+      "category": "follow_up",
+      "question": "Group this by month",
+      "conversation_context": [
+        {
+          "role": "user",
+          "content": "Compare delivered order revenue by region."
+        },
+        {
+          "role": "assistant",
+          "content": "The comparison showed stronger revenue in North America and Europe."
+        }
+      ],
+      "gold_sql": [
+        "SELECT rg.region_name AS region, date_trunc('month', o.ordered_at)::date AS month, SUM(p.amount) AS revenue\nFROM orders o\nJOIN payments p ON p.order_id = o.order_id\nJOIN stores s ON s.store_id = o.store_id\nJOIN regions rg ON rg.region_id = s.region_id\nWHERE o.order_status = 'delivered'\nGROUP BY rg.region_name, month",
+        "SELECT rg.region_name AS region, date_trunc('month', o.ordered_at)::date AS month, SUM(p.amount) AS revenue\nFROM orders o\nJOIN payments p ON p.order_id = o.order_id\nJOIN customers c ON c.customer_id = o.customer_id\nJOIN regions rg ON rg.region_id = c.region_id\nWHERE o.order_status = 'delivered'\nGROUP BY rg.region_name, month"
+      ],
+      "match": {
+        "required": [
+          [
+            "region"
+          ],
+          [
+            "revenue"
+          ]
+        ],
+        "ordered_column": null,
+        "prefix_ok": false,
+        "expect_empty": false
+      },
+      "notes": "Store region or customer region accepted (the previous turn did not say which)."
+    },
+    {
+      "id": "rt-dev-10",
+      "dataset": "retail_ops",
+      "split": "dev",
+      "kind": "answerable",
+      "category": "no_result",
+      "question": "Show orders from the year 2019.",
+      "conversation_context": [],
+      "gold_sql": [
+        "SELECT order_id FROM orders WHERE EXTRACT(YEAR FROM ordered_at) = 2019"
+      ],
+      "match": {
+        "required": [],
+        "ordered_column": null,
+        "prefix_ok": false,
+        "expect_empty": true
+      },
+      "notes": "Orders cover 2023–2024; correct answer is 'no orders in 2019'."
+    },
+    {
+      "id": "rt-ho-01",
+      "dataset": "retail_ops",
+      "split": "heldout",
+      "kind": "answerable",
+      "category": "aggregation",
+      "question": "How many orders were cancelled in 2024?",
+      "conversation_context": [],
+      "gold_sql": [
+        "SELECT COUNT(*) AS cancelled_orders\nFROM orders\nWHERE order_status = 'cancelled' AND ordered_at >= '2024-01-01' AND ordered_at < '2025-01-01'"
+      ],
+      "match": {
+        "required": [
+          [
+            "cancelled_orders"
+          ]
+        ],
+        "ordered_column": null,
+        "prefix_ok": false,
+        "expect_empty": false
+      },
+      "notes": ""
+    },
+    {
+      "id": "rt-ho-02",
+      "dataset": "retail_ops",
+      "split": "heldout",
+      "kind": "answerable",
+      "category": "aggregation",
+      "question": "What is the average shipping cost for each carrier?",
+      "conversation_context": [],
+      "gold_sql": [
+        "SELECT carrier, AVG(shipping_cost) AS avg_shipping_cost FROM shipments GROUP BY carrier"
+      ],
+      "match": {
+        "required": [
+          [
+            "carrier"
+          ],
+          [
+            "avg_shipping_cost"
+          ]
+        ],
+        "ordered_column": null,
+        "prefix_ok": false,
+        "expect_empty": false
+      },
+      "notes": ""
+    },
+    {
+      "id": "rt-ho-03",
+      "dataset": "retail_ops",
+      "split": "heldout",
+      "kind": "answerable",
+      "category": "ranking",
+      "question": "Which payment method brought in the most money?",
+      "conversation_context": [],
+      "gold_sql": [
+        "SELECT payment_method, SUM(amount) AS total FROM payments GROUP BY payment_method ORDER BY total DESC"
+      ],
+      "match": {
+        "required": [
+          [
+            "payment_method"
+          ],
+          [
+            "total"
+          ]
+        ],
+        "ordered_column": "total",
+        "prefix_ok": true,
+        "expect_empty": false
+      },
+      "notes": ""
+    },
+    {
+      "id": "rt-ho-04",
+      "dataset": "retail_ops",
+      "split": "heldout",
+      "kind": "answerable",
+      "category": "ranking",
+      "question": "What is the most common reason for returns?",
+      "conversation_context": [],
+      "gold_sql": [
+        "SELECT return_reason, COUNT(*) AS returns FROM return_requests GROUP BY return_reason ORDER BY returns DESC"
+      ],
+      "match": {
+        "required": [
+          [
+            "return_reason"
+          ],
+          [
+            "returns"
+          ]
+        ],
+        "ordered_column": "returns",
+        "prefix_ok": true,
+        "expect_empty": false
+      },
+      "notes": ""
+    },
+    {
+      "id": "rt-ho-05",
+      "dataset": "retail_ops",
+      "split": "heldout",
+      "kind": "answerable",
+      "category": "aggregation",
+      "question": "How many high-priority support tickets are there of each type?",
+      "conversation_context": [],
+      "gold_sql": [
+        "SELECT ticket_type, COUNT(*) AS tickets FROM support_tickets WHERE priority = 'high' GROUP BY ticket_type"
+      ],
+      "match": {
+        "required": [
+          [
+            "ticket_type"
+          ],
+          [
+            "tickets"
+          ]
+        ],
+        "ordered_column": null,
+        "prefix_ok": false,
+        "expect_empty": false
+      },
+      "notes": ""
+    },
+    {
+      "id": "rt-ho-06",
+      "dataset": "retail_ops",
+      "split": "heldout",
+      "kind": "answerable",
+      "category": "aggregation",
+      "question": "What is the average satisfaction score for each ticket type?",
+      "conversation_context": [],
+      "gold_sql": [
+        "SELECT ticket_type, AVG(satisfaction_score) AS avg_satisfaction FROM support_tickets GROUP BY ticket_type"
+      ],
+      "match": {
+        "required": [
+          [
+            "ticket_type"
+          ],
+          [
+            "avg_satisfaction"
+          ]
+        ],
+        "ordered_column": null,
+        "prefix_ok": false,
+        "expect_empty": false
+      },
+      "notes": ""
+    },
+    {
+      "id": "rt-ho-07",
+      "dataset": "retail_ops",
+      "split": "heldout",
+      "kind": "answerable",
+      "category": "ranking",
+      "question": "Which store had the highest revenue in 2024?",
+      "conversation_context": [],
+      "gold_sql": [
+        "SELECT s.store_id, s.store_name, SUM(p.amount) AS revenue\nFROM orders o\nJOIN payments p ON p.order_id = o.order_id\nJOIN stores s ON s.store_id = o.store_id\nWHERE o.ordered_at >= '2024-01-01' AND o.ordered_at < '2025-01-01'\nGROUP BY s.store_id\nORDER BY revenue DESC",
+        "SELECT s.store_id, s.store_name, SUM(p.amount) AS revenue\nFROM orders o\nJOIN payments p ON p.order_id = o.order_id\nJOIN stores s ON s.store_id = o.store_id\nWHERE p.paid_at >= '2024-01-01' AND p.paid_at < '2025-01-01'\nGROUP BY s.store_id\nORDER BY revenue DESC"
+      ],
+      "match": {
+        "required": [
+          [
+            "store_id",
+            "store_name"
+          ],
+          [
+            "revenue"
+          ]
+        ],
+        "ordered_column": "revenue",
+        "prefix_ok": true,
+        "expect_empty": false
+      },
+      "notes": "Year by order date or payment date both accepted."
+    },
+    {
+      "id": "rt-ho-08",
+      "dataset": "retail_ops",
+      "split": "heldout",
+      "kind": "answerable",
+      "category": "aggregation",
+      "question": "How many shipments are still in transit for each carrier?",
+      "conversation_context": [],
+      "gold_sql": [
+        "SELECT carrier, COUNT(*) AS in_transit FROM shipments WHERE shipment_status = 'in_transit' GROUP BY carrier",
+        "SELECT carrier, COUNT(*) FILTER (WHERE shipment_status = 'in_transit') AS in_transit FROM shipments GROUP BY carrier"
+      ],
+      "match": {
+        "required": [
+          [
+            "carrier"
+          ],
+          [
+            "in_transit"
+          ]
+        ],
+        "ordered_column": null,
+        "prefix_ok": false,
+        "expect_empty": false
+      },
+      "notes": "All 226 in-transit shipments are with DHL; listing FedEx and UPS with 0 is also accepted."
+    },
+    {
+      "id": "rt-ho-09",
+      "dataset": "retail_ops",
+      "split": "heldout",
+      "kind": "answerable",
+      "category": "ranking",
+      "question": "Using each product's preferred supplier cost, which 3 products have the biggest gap between list price and cost?",
+      "conversation_context": [],
+      "gold_sql": [
+        "SELECT pr.product_id, pr.product_name, pr.list_price - ps.unit_cost AS margin\nFROM products pr\nJOIN product_suppliers ps ON ps.product_id = pr.product_id AND ps.preferred_supplier\nORDER BY margin DESC, pr.product_id\nLIMIT 3"
+      ],
+      "match": {
+        "required": [
+          [
+            "product_id",
+            "product_name"
+          ],
+          [
+            "margin"
+          ]
+        ],
+        "ordered_column": "margin",
+        "prefix_ok": false,
+        "expect_empty": false
+      },
+      "notes": "Shows that a cost question IS answerable here (unlike Pagila), when the cost data exists."
+    },
+    {
+      "id": "rt-ho-10",
+      "dataset": "retail_ops",
+      "split": "heldout",
+      "kind": "answerable",
+      "category": "trend",
+      "question": "How many new customers joined each year?",
+      "conversation_context": [],
+      "gold_sql": [
+        "SELECT EXTRACT(YEAR FROM joined_on)::int AS year, COUNT(*) AS customers\nFROM customers\nGROUP BY 1\nORDER BY 1"
+      ],
+      "match": {
+        "required": [
+          [
+            "customers"
+          ]
+        ],
+        "ordered_column": "customers",
+        "prefix_ok": false,
+        "expect_empty": false
+      },
+      "notes": ""
+    },
+    {
+      "id": "rt-ho-11",
+      "dataset": "retail_ops",
+      "split": "heldout",
+      "kind": "ambiguous",
+      "category": "vague_metric",
+      "question": "Who are our top sales reps?",
+      "interpretations": [
+        {
+          "label": "Most revenue",
+          "gold_sql": [
+            "SELECT sr.sales_rep_id, sr.full_name AS rep_name, SUM(p.amount) AS revenue\nFROM orders o\nJOIN payments p ON p.order_id = o.order_id\nJOIN sales_reps sr ON sr.sales_rep_id = o.sales_rep_id\nGROUP BY sr.sales_rep_id\nORDER BY revenue DESC, sr.sales_rep_id"
+          ],
+          "match": {
+            "required": [
+              [
+                "sales_rep_id",
+                "rep_name"
+              ],
+              [
+                "revenue"
+              ]
+            ],
+            "ordered_column": "revenue",
+            "prefix_ok": true,
+            "expect_empty": false
+          }
+        },
+        {
+          "label": "Most orders (not cancelled)",
+          "gold_sql": [
+            "SELECT sr.sales_rep_id, sr.full_name AS rep_name, COUNT(*) AS orders\nFROM orders o\nJOIN sales_reps sr ON sr.sales_rep_id = o.sales_rep_id\nWHERE o.order_status <> 'cancelled'\nGROUP BY sr.sales_rep_id\nORDER BY orders DESC, sr.sales_rep_id"
+          ],
+          "match": {
+            "required": [
+              [
+                "sales_rep_id",
+                "rep_name"
+              ],
+              [
+                "orders"
+              ]
+            ],
+            "ordered_column": "orders",
+            "prefix_ok": true,
+            "expect_empty": false
+          }
+        }
+      ],
+      "notes": "",
+      "conversation_context": []
+    },
+    {
+      "id": "rt-ho-12",
+      "dataset": "retail_ops",
+      "split": "heldout",
+      "kind": "ambiguous",
+      "category": "vague_metric",
+      "question": "How long does delivery take?",
+      "interpretations": [
+        {
+          "label": "From shipping to delivery",
+          "gold_sql": [
+            "SELECT AVG(EXTRACT(EPOCH FROM (delivered_at - shipped_at)) / 86400) AS avg_days\nFROM shipments\nWHERE delivered_at IS NOT NULL"
+          ],
+          "match": {
+            "required": [
+              [
+                "avg_days"
+              ]
+            ],
+            "ordered_column": null,
+            "prefix_ok": false,
+            "expect_empty": false
+          }
+        },
+        {
+          "label": "From order to delivery",
+          "gold_sql": [
+            "SELECT AVG(EXTRACT(EPOCH FROM (s.delivered_at - o.ordered_at)) / 86400) AS avg_days\nFROM shipments s\nJOIN orders o ON o.order_id = s.order_id\nWHERE s.delivered_at IS NOT NULL"
+          ],
+          "match": {
+            "required": [
+              [
+                "avg_days"
+              ]
+            ],
+            "ordered_column": null,
+            "prefix_ok": false,
+            "expect_empty": false
+          }
+        }
+      ],
+      "notes": "",
+      "conversation_context": []
+    },
+    {
+      "id": "rt-ho-13",
+      "dataset": "retail_ops",
+      "split": "heldout",
+      "kind": "ambiguous",
+      "category": "vague_metric",
+      "question": "Which products perform best?",
+      "interpretations": [
+        {
+          "label": "Most revenue",
+          "gold_sql": [
+            "SELECT pr.product_id, pr.product_name,\n       SUM(oi.quantity * oi.unit_price - oi.discount_amount) AS revenue\nFROM order_items oi\nJOIN orders o ON o.order_id = oi.order_id\nJOIN products pr ON pr.product_id = oi.product_id\nWHERE o.order_status <> 'cancelled'\nGROUP BY pr.product_id\nORDER BY revenue DESC, pr.product_id"
+          ],
+          "match": {
+            "required": [
+              [
+                "product_id",
+                "product_name"
+              ],
+              [
+                "revenue"
+              ]
+            ],
+            "ordered_column": "revenue",
+            "prefix_ok": true,
+            "expect_empty": false
+          }
+        },
+        {
+          "label": "Most units sold",
+          "gold_sql": [
+            "SELECT pr.product_id, pr.product_name, SUM(oi.quantity) AS units\nFROM order_items oi\nJOIN orders o ON o.order_id = oi.order_id\nJOIN products pr ON pr.product_id = oi.product_id\nWHERE o.order_status <> 'cancelled'\nGROUP BY pr.product_id\nORDER BY units DESC, pr.product_id"
+          ],
+          "match": {
+            "required": [
+              [
+                "product_id",
+                "product_name"
+              ],
+              [
+                "units"
+              ]
+            ],
+            "ordered_column": "units",
+            "prefix_ok": true,
+            "expect_empty": false
+          }
+        }
+      ],
+      "notes": "",
+      "conversation_context": []
+    },
+    {
+      "id": "rt-ho-14",
+      "dataset": "retail_ops",
+      "split": "heldout",
+      "kind": "unanswerable",
+      "category": "unanswerable",
+      "question": "How much did we spend on marketing for each promotion?",
+      "reason": "Promotions record a discount percentage and dates, but no marketing spend.",
+      "suggested_alternative": "How much discount was given on orders that used each promotion?",
+      "conversation_context": []
+    },
+    {
+      "id": "rt-ho-15",
+      "dataset": "retail_ops",
+      "split": "heldout",
+      "kind": "unanswerable",
+      "category": "unanswerable",
+      "question": "How many people visited the online store last month?",
+      "reason": "There is no website traffic or visit data; only orders are recorded.",
+      "suggested_alternative": "How many online orders were placed each month?",
+      "conversation_context": []
+    },
+    {
+      "id": "rt-ho-16",
+      "dataset": "retail_ops",
+      "split": "heldout",
+      "kind": "unanswerable",
+      "category": "unanswerable",
+      "question": "Which sales reps have the highest salaries?",
+      "reason": "The sales_reps table has names, stores and hire dates, but no salary.",
+      "suggested_alternative": "Which sales reps brought in the most revenue?",
+      "conversation_context": []
+    }
+  ]
+}

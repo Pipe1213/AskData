@@ -1,6 +1,8 @@
-.PHONY: docker-up docker-down docker-logs load-dataset reload-schema-cache backend-install backend-dev frontend-install frontend-dev test-backend lint-frontend build-frontend benchmark-backend benchmark-dual verify
+.PHONY: docker-up docker-down docker-logs load-dataset reload-schema-cache backend-install backend-dev frontend-install frontend-dev test-backend lint-frontend build-frontend benchmark-backend benchmark-dual verify eval eval-test eval-expected
 
 DATASET ?= pagila
+LABEL ?= run
+SPLIT ?= all
 
 docker-up:
 	docker compose up -d postgres
@@ -47,3 +49,15 @@ benchmark-dual:
 	$(MAKE) benchmark-backend DATASET=retail_ops
 
 verify: test-backend lint-frontend build-frontend
+
+eval-test:
+	python3 eval/test_score.py
+
+eval:
+	./backend/scripts/load_dataset.sh $(DATASET)
+	-curl -fsS -X POST http://127.0.0.1:8000/schema/reload > /dev/null
+	python3 eval/score.py --dataset $(DATASET) --split $(SPLIT) --label $(LABEL)
+
+eval-expected:
+	./backend/scripts/load_dataset.sh $(DATASET)
+	backend/.venv/bin/python eval/build_expected.py --dataset $(DATASET) --dsn postgresql://postgres:postgres@localhost:55432/pagila
