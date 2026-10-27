@@ -101,6 +101,7 @@ def run_query(
         error_payload = QueryErrorResponse(
             error=ErrorPayload(**exc.to_error_payload()),
             warnings=warnings if isinstance(warnings, list) else [],
+            usage=exc.usage,
             debug=(
                 DebugPayload(
                     stage=exc.stage,

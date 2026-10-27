@@ -1,108 +1,55 @@
-const sampleColumns = ["category", "revenue"];
-const sampleRows = [
-  ["Sports", "$12,000"],
-  ["Animation", "$11,100"],
-  ["Sci-Fi", "$10,850"],
-  ["Family", "$10,430"],
-];
+import { formatCell, isNumericValue } from "@/lib/format";
+
+const MAX_TABLE_ROWS = 50;
 
 type ResultsTableProps = {
-  columns?: string[];
-  rows?: Array<Array<unknown>>;
-  totalRowCount?: number;
-  isLoading: boolean;
-  variant?: "panel" | "embedded" | "inline";
+  columns: string[];
+  rows: Array<Array<unknown>>;
+  totalRowCount: number;
 };
 
-export function ResultsTable({
-  columns,
-  rows,
-  totalRowCount,
-  isLoading,
-  variant = "panel",
-}: ResultsTableProps) {
-  const displayColumns = columns && columns.length > 0 ? columns : sampleColumns;
-  const hasLiveRows = Array.isArray(rows);
-  const displayRows = hasLiveRows && rows.length > 0 ? rows : sampleRows;
-  const isPlaceholder = !hasLiveRows;
-  const isNoResult = hasLiveRows && rows.length === 0;
-  const previewRows = displayRows.slice(0, 12);
-  const wrapperClass =
-    variant === "embedded"
-      ? "rounded-[24px] border border-line bg-white/85 p-4"
-      : variant === "inline"
-        ? ""
-        : "panel p-5";
-  const showMeta = variant !== "inline";
-  const tableWrapperClass =
-    variant === "inline"
-      ? "mt-3 overflow-hidden rounded-[20px] border border-line"
-      : "mt-4 overflow-hidden rounded-[24px] border border-line";
+export function ResultsTable({ columns, rows, totalRowCount }: ResultsTableProps) {
+  const shown = rows.slice(0, MAX_TABLE_ROWS);
+  const numericColumns = columns.map((_, index) => shown.length > 0 && shown.every((row) => row[index] == null || isNumericValue(row[index])));
 
   return (
-    <section className={wrapperClass}>
-      {variant === "panel" ? (
-        <>
-          <div className="eyebrow">Results</div>
-          <h3 className="section-title mt-4">Tabular result preview</h3>
-        </>
-      ) : variant === "embedded" ? (
-        <div className="mb-3 flex items-center justify-between gap-3">
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted">Result preview</p>
-          <span className="chip">{previewRows.length} rows shown</span>
-        </div>
-      ) : null}
-      {showMeta ? (
-        <p className={`${variant === "panel" ? "mt-3" : "mb-4"} text-sm leading-6 text-muted`}>
-          {isLoading
-            ? "Waiting for row data from the backend."
-            : isNoResult
-              ? "The query ran successfully but returned no matching rows."
-              : isPlaceholder
-                ? "No live result yet. These placeholder rows show how the result table will look."
-                : `Rendering a preview of ${previewRows.length} rows from a total of ${totalRowCount ?? displayRows.length} returned by the backend.`}
-        </p>
-      ) : null}
-      {!isNoResult ? (
-        <div className={tableWrapperClass}>
-          <div className="overflow-x-auto">
-            <table className="min-w-full border-collapse bg-white">
-              <thead>
-                <tr className="bg-accentSoft text-left text-sm text-ink">
-                  {displayColumns.map((column) => (
-                    <th key={column} className="border-b border-line px-4 py-3 font-semibold">
-                      {column}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {previewRows.map((row, rowIndex) => (
-                  <tr
-                    key={`${rowIndex}-${String(row[0] ?? "row")}`}
-                    className="text-sm text-muted"
+    <div className="flex flex-col gap-2">
+      <div className="overflow-x-auto rounded-[10px] border border-line">
+        <table className="min-w-full border-collapse text-sm">
+          <thead>
+            <tr className="bg-sidebar text-left">
+              {columns.map((column, index) => (
+                <th
+                  key={column}
+                  scope="col"
+                  className={`whitespace-nowrap border-b border-line px-3 py-2 font-medium text-ink ${numericColumns[index] ? "text-right" : ""}`}
+                >
+                  {column}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {shown.map((row, rowIndex) => (
+              <tr key={rowIndex} className="border-b border-line last:border-b-0">
+                {row.map((value, cellIndex) => (
+                  <td
+                    key={cellIndex}
+                    className={`px-3 py-2 text-inkSoft ${numericColumns[cellIndex] ? "text-right font-mono text-[13px]" : ""}`}
                   >
-                    {row.map((value, cellIndex) => (
-                      <td
-                        key={`${rowIndex}-${cellIndex}`}
-                        className="border-b border-line px-4 py-3 last:border-b-0"
-                      >
-                        {String(value)}
-                      </td>
-                    ))}
-                  </tr>
+                    {formatCell(value)}
+                  </td>
                 ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      ) : null}
-      {showMeta && !isPlaceholder && !isNoResult && displayRows.length > previewRows.length ? (
-        <p className="mt-3 text-sm leading-6 text-muted">
-          Only the first {previewRows.length} rows are shown in the preview. The backend
-          may still return more rows within its response cap.
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {totalRowCount > shown.length ? (
+        <p className="m-0 text-[13px] text-muted">
+          Showing {shown.length} of {totalRowCount} rows. Download CSV for all of them.
         </p>
       ) : null}
-    </section>
+    </div>
   );
 }

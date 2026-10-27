@@ -2,6 +2,7 @@ from collections.abc import Generator
 from contextlib import contextmanager
 
 import psycopg
+from psycopg.conninfo import conninfo_to_dict
 from psycopg.rows import dict_row
 
 from app.core.config import Settings, get_settings
@@ -12,6 +13,9 @@ def build_postgres_connection_kwargs(
     settings: Settings | None = None,
     connection_settings: PostgresConnectionSettings | None = None,
 ) -> dict[str, str | int]:
+    active_settings = settings or get_settings()
+    connect_timeout = getattr(active_settings, "postgres_connect_timeout_seconds", 10)
+
     if connection_settings is not None:
         return {
             "host": connection_settings.host,
@@ -20,15 +24,20 @@ def build_postgres_connection_kwargs(
             "user": connection_settings.user,
             "password": connection_settings.password,
             "sslmode": connection_settings.sslmode,
+            "connect_timeout": connect_timeout,
         }
 
-    active_settings = settings or get_settings()
+    database_url = getattr(active_settings, "database_url", None)
+    if database_url:
+        return {"connect_timeout": connect_timeout, **conninfo_to_dict(database_url)}
+
     return {
         "host": active_settings.postgres_host,
         "port": active_settings.postgres_port,
         "dbname": active_settings.postgres_db,
         "user": active_settings.postgres_user,
         "password": active_settings.postgres_password,
+        "connect_timeout": connect_timeout,
     }
 
 

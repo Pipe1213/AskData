@@ -1,6 +1,9 @@
+import os
 from collections.abc import Iterator
 
+import psycopg
 import pytest
+from psycopg.conninfo import conninfo_to_dict
 from fastapi.testclient import TestClient
 
 from app.db.metadata_models import (
@@ -9,7 +12,9 @@ from app.db.metadata_models import (
     ForeignKeyMetadata,
     TableMetadata,
 )
+from app.db.connection import build_postgres_connection_kwargs
 from app.main import create_app
+from app.schemas.data_source import PostgresConnectionSettings
 
 
 @pytest.fixture
@@ -87,6 +92,29 @@ def sample_schema() -> DatabaseSchema:
     )
 
     return DatabaseSchema(tables=[customer_table, payment_table])
+
+
+@pytest.fixture
+def admin_connection_settings() -> PostgresConnectionSettings:
+    """A user that can create schemas and roles, for tests against the local demo database.
+
+    ASKDATA_TEST_ADMIN_URL overrides the local Docker default. Skips when it is not reachable.
+    """
+    url = os.environ.get("ASKDATA_TEST_ADMIN_URL", "postgresql://postgres:postgres@localhost:55432/pagila")
+    parsed = conninfo_to_dict(url)
+    settings = PostgresConnectionSettings(
+        host=parsed.get("host", "localhost"),
+        port=int(parsed.get("port", 5432)),
+        database=parsed.get("dbname", "postgres"),
+        user=parsed.get("user", "postgres"),
+        password=parsed.get("password", ""),
+        sslmode=parsed.get("sslmode", "prefer"),
+    )
+    try:
+        psycopg.connect(**{**build_postgres_connection_kwargs(connection_settings=settings), "connect_timeout": 3}).close()
+    except psycopg.OperationalError as exc:
+        pytest.skip(f"PostgreSQL not reachable: {exc.__class__.__name__}")
+    return settings
 
 
 @pytest.fixture

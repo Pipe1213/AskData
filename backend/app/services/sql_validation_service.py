@@ -8,6 +8,7 @@ FORBIDDEN_EXPRESSION_CLASS_NAMES = (
     "Alter",
     "Command",
     "Commit",
+    "Copy",
     "Create",
     "Delete",
     "Drop",
@@ -20,6 +21,33 @@ FORBIDDEN_EXPRESSION_CLASS_NAMES = (
     "Truncate",
     "Update",
 )
+
+# Functions that read or write server files, reach other servers, sleep, signal other sessions
+# or change settings. Denied anywhere in the statement, schema-qualified or not.
+DENIED_FUNCTION_NAMES = frozenset(
+    {
+        "pg_read_file",
+        "pg_read_binary_file",
+        "pg_ls_dir",
+        "pg_stat_file",
+        "pg_terminate_backend",
+        "pg_cancel_backend",
+        "pg_reload_conf",
+        "pg_rotate_logfile",
+        "set_config",
+    }
+)
+DENIED_FUNCTION_PREFIXES = (
+    "lo_",
+    "dblink",
+    "pg_sleep",
+    "pg_read_",
+    "pg_ls_",
+    "pg_file_",
+    "pg_advisory",
+)
+# Schemas generated SQL may never touch, whatever the connection's privileges.
+DENIED_SCHEMAS = frozenset({"askdata_app"})
 
 
 class SQLValidationService:
@@ -82,6 +110,26 @@ class SQLValidationService:
                 ],
             )
 
+        denied_functions = self._find_denied_functions(expression)
+        if denied_functions:
+            return SQLValidationResult(
+                original_sql=sql,
+                is_valid=False,
+                can_repair=False,
+                classification="hard_safety_failure",
+                errors=["Unsafe SQL function detected: " + ", ".join(denied_functions)],
+            )
+
+        denied_schemas = self._find_denied_schemas(expression)
+        if denied_schemas:
+            return SQLValidationResult(
+                original_sql=sql,
+                is_valid=False,
+                can_repair=False,
+                classification="hard_safety_failure",
+                errors=["Access to internal schema is not allowed: " + ", ".join(denied_schemas)],
+            )
+
         if not self._contains_select(expression):
             return SQLValidationResult(
                 original_sql=sql,
@@ -123,6 +171,23 @@ class SQLValidationService:
                 violations.append(expression_class.__name__)
 
         return violations
+
+    def _find_denied_functions(self, expression: exp.Expression) -> list[str]:
+        denied: set[str] = set()
+        for function in expression.find_all(exp.Func):
+            name = (function.name if isinstance(function, exp.Anonymous) else function.sql_name()).lower()
+            if name in DENIED_FUNCTION_NAMES or name.startswith(DENIED_FUNCTION_PREFIXES):
+                denied.add(name)
+        return sorted(denied)
+
+    def _find_denied_schemas(self, expression: exp.Expression) -> list[str]:
+        denied: set[str] = set()
+        for table in expression.find_all(exp.Table):
+            schema_name = table.args.get("db")
+            name = getattr(schema_name, "name", None)
+            if name and name.lower() in DENIED_SCHEMAS:
+                denied.add(name.lower())
+        return sorted(denied)
 
     def _contains_select(self, expression: exp.Expression) -> bool:
         return expression.find(exp.Select) is not None

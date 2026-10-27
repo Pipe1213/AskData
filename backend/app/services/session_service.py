@@ -32,7 +32,11 @@ class SessionService:
     def initialize_storage(self) -> None:
         with get_db_connection(self.settings) as connection:
             with connection.cursor() as cursor:
-                cursor.execute(f"CREATE SCHEMA IF NOT EXISTS {self.schema_name}")
+                # CREATE SCHEMA IF NOT EXISTS needs CREATE on the database even when the schema
+                # exists; the read-only app user only owns its existing schema.
+                cursor.execute("SELECT 1 FROM pg_catalog.pg_namespace WHERE nspname = %s", (self.schema_name,))
+                if cursor.fetchone() is None:
+                    cursor.execute(f"CREATE SCHEMA {self.schema_name}")
                 cursor.execute(
                     f"""
                     CREATE TABLE IF NOT EXISTS {self.schema_name}.chat_sessions (
@@ -69,6 +73,7 @@ class SessionService:
                         error_code TEXT,
                         error_message TEXT,
                         repaired BOOLEAN NOT NULL DEFAULT FALSE,
+                        response_payload JSONB,
                         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                     )
                     """
@@ -101,6 +106,14 @@ class SessionService:
                     f"""
                     ALTER TABLE {self.schema_name}.chat_turns
                     ADD COLUMN IF NOT EXISTS trace_json JSONB NOT NULL DEFAULT '{{}}'::jsonb
+                    """
+                )
+                # Response type, clarification / cannot-answer payloads and assumptions, so a
+                # reopened turn renders the same as when it was asked. NULL for older turns.
+                cursor.execute(
+                    f"""
+                    ALTER TABLE {self.schema_name}.chat_turns
+                    ADD COLUMN IF NOT EXISTS response_payload JSONB
                     """
                 )
                 cursor.execute(
@@ -202,6 +215,7 @@ class SessionService:
                         error_code,
                         error_message,
                         repaired,
+                        response_payload,
                         created_at
                     FROM {self.schema_name}.chat_turns
                     WHERE session_id = %s
@@ -291,9 +305,10 @@ class SessionService:
                         memory_json,
                         plan_json,
                         trace_json,
-                        repaired
+                        repaired,
+                        response_payload
                     ) VALUES (
-                        %s, %s, %s, 'success', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                        %s, %s, %s, 'success', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                     )
                     RETURNING created_at
                     """,
@@ -323,6 +338,7 @@ class SessionService:
                         Jsonb(self._to_jsonable(response.plan.model_dump() if response.plan else {})),
                         Jsonb(self._to_jsonable(response.trace.model_dump() if response.trace else {})),
                         response.repaired,
+                        Jsonb(self._to_jsonable(self._build_response_payload(response))),
                     ),
                 )
                 created_row = cursor.fetchone()
@@ -559,8 +575,13 @@ class SessionService:
     def _build_session_turn(self, session_id: str, row: dict[str, Any]) -> SessionTurn:
         created_at = self._isoformat(row["created_at"])
         if row["status"] == "success":
+            payload = row.get("response_payload") or {}
             response = QueryResponse(
                 question=row["question"],
+                response_type=payload.get("response_type") or "answer",
+                clarification=payload.get("clarification"),
+                cannot_answer=payload.get("cannot_answer"),
+                assumptions=list(payload.get("assumptions") or []),
                 answer_summary=row["answer_summary"] or "",
                 generated_sql=row["generated_sql"] or "",
                 columns=list(row["columns_json"] or []),
@@ -612,6 +633,14 @@ class SessionService:
             created_at=created_at,
             error=error,
         )
+
+    def _build_response_payload(self, response: QueryResponse) -> dict[str, Any]:
+        return {
+            "response_type": response.response_type,
+            "clarification": response.clarification.model_dump() if response.clarification else None,
+            "cannot_answer": response.cannot_answer.model_dump() if response.cannot_answer else None,
+            "assumptions": list(response.assumptions),
+        }
 
     def _build_session_title(self, question: str) -> str:
         normalized = " ".join(question.strip().split())

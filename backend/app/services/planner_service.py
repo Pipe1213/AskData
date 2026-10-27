@@ -1,22 +1,16 @@
 from app.schemas.query import ConversationMessage, MemoryContext, QueryPlan
+from app.services.business_vocabulary import (
+    AVERAGE_WORDS,
+    COMPARISON_WORDS,
+    CONCEPTS,
+    COUNT_WORDS,
+    TIME_WORDS,
+    TOPK_WORDS,
+    concepts_in,
+    has_money_intent,
+)
 from app.utils.text import significant_tokens
 
-REVENUE_TOKENS = {"revenue", "sale", "sales", "spend", "spent", "earning", "earnings"}
-CATEGORY_TOKENS = {"category", "genre"}
-CUSTOMER_TOKENS = {"customer", "customers", "buyer", "buyers"}
-STAFF_TOKENS = {"staff", "employee", "employees"}
-RENTAL_TOKENS = {"rental", "rentals", "rented", "rent"}
-PRODUCT_TOKENS = {"product", "products", "item", "items", "sku"}
-BRAND_TOKENS = {"brand", "brands"}
-REGION_TOKENS = {"region", "regions", "market", "markets", "country", "countries"}
-ORDER_TOKENS = {"order", "orders", "ordered", "purchase", "purchases"}
-RETURN_TOKENS = {"return", "returns", "refund", "refunds"}
-SHIPMENT_TOKENS = {"shipment", "shipments", "delivery", "deliveries", "carrier"}
-TIME_TOKENS = {"date", "dates", "trend", "monthly", "month", "daily", "yearly", "time", "year", "day"}
-COUNT_TOKENS = {"count", "counts", "number", "many"}
-AVERAGE_TOKENS = {"average", "avg", "mean"}
-COMPARISON_TOKENS = {"compare", "comparison", "versus", "vs"}
-TOPK_TOKENS = {"top", "highest", "most", "best"}
 SCHEMA_TOKENS = {"schema", "table", "tables", "column", "columns"}
 REFERENTIAL_TOKENS = {
     "that",
@@ -95,13 +89,13 @@ class PlannerService:
             return "schema_lookup"
         if conversation_context and (len(question_tokens) <= 4 or split_terms & REFERENTIAL_TOKENS):
             return "follow_up_refinement"
-        if question_tokens & COMPARISON_TOKENS:
+        if question_tokens & COMPARISON_WORDS:
             return "comparison"
-        if question_tokens & TOPK_TOKENS:
+        if question_tokens & TOPK_WORDS:
             return "ranking"
-        if question_tokens & TIME_TOKENS:
+        if question_tokens & TIME_WORDS:
             return "trend"
-        if question_tokens & (COUNT_TOKENS | AVERAGE_TOKENS | REVENUE_TOKENS):
+        if question_tokens & (COUNT_WORDS | AVERAGE_WORDS) or has_money_intent(question_tokens):
             return "aggregation"
         if len(question_tokens) <= 2:
             return "ambiguous"
@@ -109,70 +103,33 @@ class PlannerService:
 
     def _metric_targets(self, question_tokens: set[str]) -> list[str]:
         metric_targets: list[str] = []
-        if question_tokens & REVENUE_TOKENS:
-            metric_targets.extend(["amount", "revenue", "total_spent", "total_revenue"])
-        if question_tokens & COUNT_TOKENS:
-            metric_targets.extend(["count", "rental_count", "payment_count"])
-        if question_tokens & AVERAGE_TOKENS:
+        if has_money_intent(question_tokens):
+            metric_targets.extend(sorted(CONCEPTS["money"].name_words - {"payment", "invoice"}))
+        if question_tokens & COUNT_WORDS:
+            metric_targets.append("count")
+        if question_tokens & AVERAGE_WORDS:
             metric_targets.extend(["avg", "average"])
         return list(dict.fromkeys(metric_targets))
 
     def _dimension_targets(self, question_tokens: set[str]) -> list[str]:
         dimension_targets: list[str] = []
-        if question_tokens & CUSTOMER_TOKENS:
-            dimension_targets.extend(["customer", "customer_id", "first_name", "last_name"])
-        if question_tokens & STAFF_TOKENS:
-            dimension_targets.extend(["staff", "employee", "sales_rep", "staff_id", "sales_rep_id", "first_name", "last_name", "full_name"])
-        if question_tokens & CATEGORY_TOKENS:
-            dimension_targets.extend(["category", "category_name", "name", "category_id"])
-        if question_tokens & PRODUCT_TOKENS:
-            dimension_targets.extend(["product", "product_name", "product_id", "sku"])
-        if question_tokens & BRAND_TOKENS:
-            dimension_targets.extend(["brand", "brand_name", "brand_id"])
-        if question_tokens & REGION_TOKENS:
-            dimension_targets.extend(["region", "region_name", "region_id"])
-        if question_tokens & RENTAL_TOKENS:
-            dimension_targets.extend(["rental", "inventory", "film"])
-        if question_tokens & ORDER_TOKENS:
-            dimension_targets.extend(["order", "order_id", "order_status", "order_channel"])
-        if question_tokens & RETURN_TOKENS:
-            dimension_targets.extend(["return", "return_status", "return_reason"])
-        if question_tokens & SHIPMENT_TOKENS:
-            dimension_targets.extend(["shipment", "carrier", "shipment_status"])
+        for concept in concepts_in(question_tokens):
+            if concept.is_measure:
+                continue
+            dimension_targets.extend(sorted(concept.name_words))
+        if dimension_targets:
+            dimension_targets.append("name")
         return list(dict.fromkeys(dimension_targets))
 
     def _time_targets(self, question_tokens: set[str]) -> list[str]:
-        if not question_tokens & TIME_TOKENS:
-            return []
-        return ["payment_date", "paid_at", "rental_date", "ordered_at", "shipped_at", "requested_at", "month", "year"]
+        """The time words the question uses; retrieval matches them to date and timestamp columns."""
+        return sorted(question_tokens & TIME_WORDS)
 
     def _candidate_table_families(self, question_tokens: set[str]) -> list[str]:
+        """Words likely to appear in the names of the tables the question needs."""
         families: list[str] = []
-        if question_tokens & REVENUE_TOKENS:
-            families.append("payment")
-            families.append("order")
-        if question_tokens & CUSTOMER_TOKENS:
-            families.append("customer")
-        if question_tokens & STAFF_TOKENS:
-            families.append("sales_rep")
-        if question_tokens & RENTAL_TOKENS:
-            families.append("rental")
-        if question_tokens & CATEGORY_TOKENS:
-            families.append("category")
-        if question_tokens & PRODUCT_TOKENS:
-            families.append("product")
-        if question_tokens & BRAND_TOKENS:
-            families.append("brand")
-        if question_tokens & REGION_TOKENS:
-            families.append("region")
-        if question_tokens & ORDER_TOKENS:
-            families.append("order")
-        if question_tokens & RETURN_TOKENS:
-            families.append("return")
-        if question_tokens & SHIPMENT_TOKENS:
-            families.append("shipment")
-        if question_tokens & TIME_TOKENS and "rental" not in families:
-            families.append("payment" if question_tokens & REVENUE_TOKENS else "order")
+        for concept in concepts_in(question_tokens):
+            families.extend(sorted(concept.name_words))
         return list(dict.fromkeys(families))
 
     def _ambiguity_notes(
@@ -185,9 +142,9 @@ class PlannerService:
         notes: list[str] = []
         if task_type == "ambiguous":
             notes.append("The question is short and may need more business context.")
-        if not metric_targets and question_tokens & (TOPK_TOKENS | COMPARISON_TOKENS):
+        if not metric_targets and question_tokens & (TOPK_WORDS | COMPARISON_WORDS):
             notes.append("The ranking or comparison intent is clear, but the business metric is not explicit.")
-        if not dimension_targets and question_tokens & (TOPK_TOKENS | COMPARISON_TOKENS | REVENUE_TOKENS):
+        if not dimension_targets and (question_tokens & (TOPK_WORDS | COMPARISON_WORDS) or has_money_intent(question_tokens)):
             notes.append("The likely grouping dimension is not explicit.")
         return notes
 
@@ -252,8 +209,10 @@ class PlannerService:
         if not should_inherit:
             return metric_targets, dimension_targets, time_targets, candidate_table_families
 
-        explicit_dimension_shift = bool(question_tokens & (TIME_TOKENS | BRAND_TOKENS | REGION_TOKENS | CATEGORY_TOKENS | PRODUCT_TOKENS | STAFF_TOKENS | CUSTOMER_TOKENS))
-        explicit_time_shift = bool(question_tokens & TIME_TOKENS)
+        explicit_dimension_shift = bool(question_tokens & TIME_WORDS) or any(
+            not concept.is_measure for concept in concepts_in(question_tokens)
+        )
+        explicit_time_shift = bool(question_tokens & TIME_WORDS)
 
         if not metric_targets:
             metric_targets = list(memory_context.suggested_metric_targets)

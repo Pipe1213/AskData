@@ -1,0 +1,93 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 800" width="960" height="800" font-family="'IBM Plex Sans', 'Segoe UI', -apple-system, Helvetica, Arial, sans-serif" role="img" aria-labelledby="title desc">
+<title id="title">How AskData answers a question</title>
+<desc id="desc">A question goes through triage, which can ask a clarifying question or decline. Answerable questions go through table retrieval, SQL writing, review, a safety check, a read-only run on PostgreSQL and an answer sentence. Errors go back to a bounded repair step.</desc>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#5e5b55"/></marker></defs>
+<rect x="0" y="0" width="960" height="800" rx="16" fill="#f6f5f2"/>
+<rect x="24" y="765" width="16" height="14" rx="3" fill="#fbf3ef" stroke="#c9a08c" stroke-width="1.25"/>
+<text x="47" y="777" font-size="12" font-weight="400" fill="#5e5b55" text-anchor="start">LLM call</text>
+<rect x="144" y="765" width="16" height="14" rx="3" fill="#ffffff" stroke="#d6d2c9" stroke-width="1.25"/>
+<text x="167" y="777" font-size="12" font-weight="400" fill="#5e5b55" text-anchor="start">Python code</text>
+<rect x="264" y="765" width="16" height="14" rx="3" fill="#f1f7f3" stroke="#b9d3c2" stroke-width="1.25"/>
+<text x="287" y="777" font-size="12" font-weight="400" fill="#5e5b55" text-anchor="start">Safety check</text>
+<rect x="330" y="20" width="300" height="40" rx="20" fill="#e9e6e0"/>
+<text x="480.0" y="45" font-size="13.5" font-weight="400" fill="#3f3d39" text-anchor="middle">Question from the UI (+ the conversation so far)</text>
+<path d="M480.0,60 L480.0,94" fill="none" stroke="#5e5b55" stroke-width="1.5" marker-end="url(#arrow)"/>
+<rect x="290" y="96" width="380" height="60" rx="10" fill="#fbf3ef" stroke="#c9a08c" stroke-width="1.25"/>
+<text x="306" y="121" font-size="15" font-weight="600" fill="#1b1a17" text-anchor="start">Triage: answer, ask or decline?</text>
+<text x="306" y="142" font-size="12.5" font-weight="400" fill="#5e5b55" text-anchor="start">sees the question, the chat and candidate tables</text>
+<rect x="627.4" y="106" width="30.6" height="18" rx="4" fill="#ffffff" stroke="#9c3f1a" stroke-width="0.8"/>
+<text x="642.7" y="119" font-size="10.5" font-weight="600" fill="#9c3f1a" text-anchor="middle" font-family="'IBM Plex Mono', Consolas, 'SFMono-Regular', Menlo, monospace">LLM</text>
+<path d="M480.0,156 L480.0,180" fill="none" stroke="#5e5b55" stroke-width="1.5" marker-end="url(#arrow)"/>
+<rect x="290" y="182" width="380" height="60" rx="10" fill="#ffffff" stroke="#d6d2c9" stroke-width="1.25"/>
+<text x="306" y="207" font-size="15" font-weight="600" fill="#1b1a17" text-anchor="start">Find the relevant tables</text>
+<text x="306" y="228" font-size="12.5" font-weight="400" fill="#5e5b55" text-anchor="start">matches question words to names; adds join paths</text>
+<path d="M480.0,242 L480.0,266" fill="none" stroke="#5e5b55" stroke-width="1.5" marker-end="url(#arrow)"/>
+<rect x="290" y="268" width="380" height="60" rx="10" fill="#fbf3ef" stroke="#c9a08c" stroke-width="1.25"/>
+<text x="306" y="293" font-size="15" font-weight="600" fill="#1b1a17" text-anchor="start">Write SQL</text>
+<text x="306" y="314" font-size="12.5" font-weight="400" fill="#5e5b55" text-anchor="start">one SELECT plus up to 3 plain-words assumptions</text>
+<rect x="627.4" y="278" width="30.6" height="18" rx="4" fill="#ffffff" stroke="#9c3f1a" stroke-width="0.8"/>
+<text x="642.7" y="291" font-size="10.5" font-weight="600" fill="#9c3f1a" text-anchor="middle" font-family="'IBM Plex Mono', Consolas, 'SFMono-Regular', Menlo, monospace">LLM</text>
+<path d="M480.0,328 L480.0,352" fill="none" stroke="#5e5b55" stroke-width="1.5" marker-end="url(#arrow)"/>
+<rect x="290" y="354" width="380" height="60" rx="10" fill="#fbf3ef" stroke="#c9a08c" stroke-width="1.25"/>
+<text x="306" y="379" font-size="15" font-weight="600" fill="#1b1a17" text-anchor="start">Review the SQL</text>
+<text x="306" y="400" font-size="12.5" font-weight="400" fill="#5e5b55" text-anchor="start">does it answer the question? one rewrite allowed</text>
+<rect x="627.4" y="364" width="30.6" height="18" rx="4" fill="#ffffff" stroke="#9c3f1a" stroke-width="0.8"/>
+<text x="642.7" y="377" font-size="10.5" font-weight="600" fill="#9c3f1a" text-anchor="middle" font-family="'IBM Plex Mono', Consolas, 'SFMono-Regular', Menlo, monospace">LLM</text>
+<path d="M480.0,414 L480.0,438" fill="none" stroke="#5e5b55" stroke-width="1.5" marker-end="url(#arrow)"/>
+<rect x="290" y="440" width="380" height="60" rx="10" fill="#f1f7f3" stroke="#b9d3c2" stroke-width="1.25"/>
+<text x="306" y="465" font-size="15" font-weight="600" fill="#1b1a17" text-anchor="start">Check the SQL</text>
+<text x="306" y="486" font-size="12.5" font-weight="400" fill="#5e5b55" text-anchor="start">single SELECT; risky functions and COPY denied</text>
+<path d="M480.0,500 L480.0,524" fill="none" stroke="#5e5b55" stroke-width="1.5" marker-end="url(#arrow)"/>
+<rect x="290" y="526" width="380" height="60" rx="10" fill="#f1f7f3" stroke="#b9d3c2" stroke-width="1.25"/>
+<text x="306" y="551" font-size="15" font-weight="600" fill="#1b1a17" text-anchor="start">Run it read-only</text>
+<text x="306" y="572" font-size="12.5" font-weight="400" fill="#5e5b55" text-anchor="start">read-only transaction · 10 s timeout · 200 rows</text>
+<path d="M480.0,586 L480.0,610" fill="none" stroke="#5e5b55" stroke-width="1.5" marker-end="url(#arrow)"/>
+<rect x="290" y="612" width="380" height="60" rx="10" fill="#fbf3ef" stroke="#c9a08c" stroke-width="1.25"/>
+<text x="306" y="637" font-size="15" font-weight="600" fill="#1b1a17" text-anchor="start">Write the answer</text>
+<text x="306" y="658" font-size="12.5" font-weight="400" fill="#5e5b55" text-anchor="start">from the result rows; every number is checked</text>
+<rect x="627.4" y="622" width="30.6" height="18" rx="4" fill="#ffffff" stroke="#9c3f1a" stroke-width="0.8"/>
+<text x="642.7" y="635" font-size="10.5" font-weight="600" fill="#9c3f1a" text-anchor="middle" font-family="'IBM Plex Mono', Consolas, 'SFMono-Regular', Menlo, monospace">LLM</text>
+<path d="M480.0,672 L480.0,696" fill="none" stroke="#5e5b55" stroke-width="1.5" marker-end="url(#arrow)"/>
+<rect x="280" y="698" width="400" height="44" rx="22" fill="#e9e6e0"/>
+<text x="480.0" y="725" font-size="13.5" font-weight="600" fill="#1b1a17" text-anchor="middle">Answer · chart or table · assumptions · SQL · cost</text>
+<rect x="724" y="70" width="216" height="66" rx="10" fill="#eaf0f6" stroke="#b7cbe0" stroke-width="1.25"/>
+<text x="738" y="93" font-size="14" font-weight="600" fill="#1f4e79" text-anchor="start">Asks first</text>
+<text x="738" y="112" font-size="12.5" font-weight="400" fill="#3f3d39" text-anchor="start">a clarifying question with</text>
+<text x="738" y="128" font-size="12.5" font-weight="400" fill="#3f3d39" text-anchor="start">2–4 options you can click</text>
+<rect x="724" y="150" width="216" height="66" rx="10" fill="#fbf4e6" stroke="#e2cfa6" stroke-width="1.25"/>
+<text x="738" y="173" font-size="14" font-weight="600" fill="#7a4a00" text-anchor="start">Says it can't answer</text>
+<text x="738" y="192" font-size="12.5" font-weight="400" fill="#3f3d39" text-anchor="start">names the missing data and</text>
+<text x="738" y="208" font-size="12.5" font-weight="400" fill="#3f3d39" text-anchor="start">suggests what it can answer</text>
+<text x="832.0" y="236" font-size="12" font-weight="400" fill="#5e5b55" text-anchor="middle">no SQL is written or run</text>
+<path d="M670,126.0 L692,126.0" fill="none" stroke="#5e5b55" stroke-width="1.5"/>
+<path d="M692,126.0 L692,103 L722,103" fill="none" stroke="#5e5b55" stroke-width="1.5" marker-end="url(#arrow)"/>
+<path d="M692,126.0 L692,183 L722,183" fill="none" stroke="#5e5b55" stroke-width="1.5" marker-end="url(#arrow)"/>
+<text x="490.0" y="173" font-size="11.5" font-weight="400" fill="#5e5b55" text-anchor="start">answerable</text>
+<path d="M670,470.0 L704,470.0" fill="none" stroke="#5e5b55" stroke-width="1.5" stroke-dasharray="5 4"/>
+<path d="M670,556.0 L704,556.0 L704,470.0" fill="none" stroke="#5e5b55" stroke-width="1.5" stroke-dasharray="5 4"/>
+<path d="M704,470.0 L704,298.0 L672,298.0" fill="none" stroke="#5e5b55" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+<text x="716" y="392" font-size="12.5" font-weight="600" fill="#3f3d39" text-anchor="start">rejected or failed:</text>
+<text x="716" y="410" font-size="12.5" font-weight="400" fill="#5e5b55" text-anchor="start">repair the SQL with the</text>
+<text x="716" y="426" font-size="12.5" font-weight="400" fill="#5e5b55" text-anchor="start">error message (bounded);</text>
+<text x="716" y="442" font-size="12.5" font-weight="400" fill="#5e5b55" text-anchor="start">empty result: one retry</text>
+<text x="716" y="458" font-size="12.5" font-weight="400" fill="#5e5b55" text-anchor="start">with broader retrieval</text>
+<rect x="24" y="176" width="216" height="76" rx="10" fill="#ffffff" stroke="#d6d2c9" stroke-width="1.25"/>
+<text x="38" y="200" font-size="14" font-weight="600" fill="#1b1a17" text-anchor="start">Schema cache</text>
+<text x="38" y="219" font-size="12.5" font-weight="400" fill="#5e5b55" text-anchor="start">tables, columns, types,</text>
+<text x="38" y="236" font-size="12.5" font-weight="400" fill="#5e5b55" text-anchor="start">keys and comments</text>
+<path d="M240,212 L288,212" fill="none" stroke="#5e5b55" stroke-width="1.5" marker-end="url(#arrow)"/>
+<path d="M132.0,176 L132.0,126.0 L288,126.0" fill="none" stroke="#5e5b55" stroke-width="1.5" marker-end="url(#arrow)"/>
+<path d="M24,470 L24,640 A108.0,14 0 0 0 240,640 L240,470" fill="#ffffff" stroke="#d6d2c9" stroke-width="1.25"/>
+<ellipse cx="132.0" cy="470" rx="108.0" ry="14" fill="#ffffff" stroke="#d6d2c9" stroke-width="1.25"/>
+<text x="38" y="510" font-size="14" font-weight="600" fill="#1b1a17" text-anchor="start">PostgreSQL</text>
+<text x="38" y="530" font-size="12.5" font-weight="400" fill="#5e5b55" text-anchor="start">your data, read through</text>
+<text x="38" y="547" font-size="12.5" font-weight="400" fill="#5e5b55" text-anchor="start">a read-only user</text>
+<text x="38" y="572" font-size="12.5" font-weight="400" fill="#5e5b55" text-anchor="start">askdata_app schema:</text>
+<text x="38" y="589" font-size="12.5" font-weight="400" fill="#5e5b55" text-anchor="start">saved conversations</text>
+<path d="M290,556.0 L242,556.0" fill="none" stroke="#5e5b55" stroke-width="1.5" marker-end="url(#arrow)"/>
+<text x="265.0" y="548.0" font-size="11" font-weight="400" fill="#5e5b55" text-anchor="middle" font-family="'IBM Plex Mono', Consolas, 'SFMono-Regular', Menlo, monospace">SELECT</text>
+<path d="M132.0,456 L132.0,254" fill="none" stroke="#5e5b55" stroke-width="1.5" marker-end="url(#arrow)"/>
+<text x="142.0" y="380" font-size="11.5" font-weight="400" fill="#5e5b55" text-anchor="start">read at startup</text>
+<text x="142.0" y="396" font-size="11.5" font-weight="400" fill="#5e5b55" text-anchor="start">(partitioned</text>
+<text x="142.0" y="412" font-size="11.5" font-weight="400" fill="#5e5b55" text-anchor="start">tables included)</text>
+</svg>

@@ -12,6 +12,7 @@ services:
     volumes:
       - askdata_postgres_data:/var/lib/postgresql/data
       - ./demo_data/seed/pagila.sql:/docker-entrypoint-initdb.d/01-pagila.sql:ro
+      - ./backend/scripts/create_app_role.sql:/docker-entrypoint-initdb.d/02-askdata-reader.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d pagila"]
       interval: 5s

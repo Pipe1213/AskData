@@ -371,3 +371,12 @@ def test_runtime_activation_route_returns_active_target_summary(client: TestClie
 
     assert response.status_code == 200
     assert response.json()["active_target"]["target_type"] == "runtime_postgres"
+
+
+def test_cors_preflight_allows_the_methods_the_ui_uses(client) -> None:
+    for method in ("GET", "POST", "PATCH", "DELETE"):
+        response = client.options(
+            "/data-sources/runtime",
+            headers={"Origin": "http://localhost:3000", "Access-Control-Request-Method": method},
+        )
+        assert response.status_code == 200, method

@@ -8,7 +8,7 @@ def test_resolve_dataset_adapter_returns_generic_for_non_pagila_schema(sample_sc
     assert adapter.name == "generic_postgres"
 
 
-def test_resolve_dataset_adapter_returns_pagila_for_pagila_like_schema() -> None:
+def test_pagila_schema_gets_no_dataset_specific_adapter() -> None:
     schema = DatabaseSchema(
         tables=[
             TableMetadata(schema_name="public", table_name="payment", full_name="public.payment"),
@@ -22,7 +22,8 @@ def test_resolve_dataset_adapter_returns_pagila_for_pagila_like_schema() -> None
 
     adapter = resolve_dataset_adapter(schema)
 
-    assert adapter.name == "pagila"
+    assert adapter.name == "generic_postgres"
+    assert adapter.prompt_hints({"revenue", "category"}) == []
 
 
 def test_resolve_dataset_adapter_handles_plural_generic_tables() -> None:

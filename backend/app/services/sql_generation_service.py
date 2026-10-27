@@ -1,7 +1,9 @@
 from app.core.config import Settings, get_settings
+from app.db.metadata_models import DatabaseSchema
 from app.llm.base import BaseLLMClient
 from app.llm.openai_client import OpenAILLMClient
 from app.llm.prompt_builders import (
+    build_question_triage_messages,
     build_sql_generation_messages,
     build_sql_repair_messages,
     build_sql_semantic_review_messages,
@@ -11,6 +13,7 @@ from app.schemas.query import (
     ConversationMessage,
     MemoryContext,
     QueryPlan,
+    QuestionTriageResult,
     SQLGenerationResult,
     SQLSemanticReviewResult,
 )
@@ -45,6 +48,31 @@ class SQLGenerationService:
             dataset_hints=dataset_hints,
         )
         return self._run_structured_generation(messages)
+
+    def triage_question(
+        self,
+        question: str,
+        schema_context: RetrievedSchemaContext,
+        schema: DatabaseSchema,
+        conversation_context: list[ConversationMessage] | None = None,
+    ) -> QuestionTriageResult:
+        messages = build_question_triage_messages(
+            question=question,
+            schema_context=schema_context,
+            schema=schema,
+            conversation_context=conversation_context,
+        )
+        llm_messages = [LLMMessage.model_validate(message) for message in messages]
+
+        llm_client = self._get_llm_client()
+        response = llm_client.generate_structured(
+            messages=llm_messages,
+            response_model=QuestionTriageResult,
+            config=LLMGenerationConfig(
+                max_output_tokens=800,
+            ),
+        )
+        return response.output
 
     def repair_sql(
         self,
@@ -124,5 +152,6 @@ class SQLGenerationService:
         self.llm_client = OpenAILLMClient(
             self.settings,
             model=self.settings.resolved_sql_model,
+            reasoning_effort=self.settings.openai_sql_reasoning_effort,
         )
         return self.llm_client

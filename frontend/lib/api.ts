@@ -258,7 +258,7 @@ function buildFallbackErrorResponse(status: number): QueryErrorResponse {
   return {
     error: {
       code: "http_error",
-      message: `The backend request failed with status ${status}.`,
+      message: `AskData's server returned an error (HTTP ${status}). Try again in a moment.`,
       details: { status },
     },
     warnings: [],

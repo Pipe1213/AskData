@@ -146,6 +146,7 @@ def rerun_turn(
     except QueryPipelineError as exc:
         error_payload = QueryErrorResponse(
             error=ErrorPayload(**exc.to_error_payload()),
+            usage=exc.usage,
             warnings=(
                 exc.details.get("warnings", [])
                 if isinstance(exc.details.get("warnings", []), list)

@@ -1,8 +1,12 @@
-import { useEffect, useRef } from "react";
+import type { FormEvent } from "react";
+
+import { ArrowUpIcon } from "@/components/ui/icons";
 
 type QuestionFormProps = {
   question: string;
   isLoading: boolean;
+  placeholder: string;
+  helper?: string | null;
   onQuestionChange: (value: string) => void;
   onSubmit: () => void;
 };
@@ -10,44 +14,41 @@ type QuestionFormProps = {
 export function QuestionForm({
   question,
   isLoading,
+  placeholder,
+  helper,
   onQuestionChange,
   onSubmit,
 }: QuestionFormProps) {
-  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-
-  useEffect(() => {
-    const textarea = textareaRef.current;
-    if (!textarea) {
-      return;
-    }
-
-    textarea.style.height = "0px";
-    const nextHeight = Math.min(Math.max(textarea.scrollHeight, 52), 156);
-    textarea.style.height = `${nextHeight}px`;
-  }, [question]);
+  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    onSubmit();
+  }
 
   return (
-    <section>
-      <div className="flex items-end gap-3">
-        <label className="block flex-1">
-          <textarea
-            ref={textareaRef}
-            rows={1}
-            value={question}
-            onChange={(event) => onQuestionChange(event.target.value)}
-            placeholder="Ask about revenue, customers, rentals, trends, or categories..."
-            className="max-h-[156px] min-h-[52px] w-full resize-none rounded-[24px] border border-line bg-white px-4 py-[13px] text-sm leading-6 text-ink outline-none transition focus:border-accent"
-          />
+    <form onSubmit={handleSubmit} className="flex w-full max-w-conversation flex-col gap-2">
+      <div className="flex items-center gap-2 rounded-[14px] border border-inputLine bg-surface py-1.5 pl-4 pr-1.5 focus-within:border-muted">
+        <label htmlFor="question" className="sr-only">
+          Your question
         </label>
+        <input
+          id="question"
+          type="text"
+          autoComplete="off"
+          value={question}
+          onChange={(event) => onQuestionChange(event.target.value)}
+          placeholder={placeholder}
+          className="h-10 min-w-0 flex-1 border-0 bg-transparent text-base text-ink outline-none placeholder:text-muted focus-visible:outline-none"
+        />
         <button
-          type="button"
-          onClick={onSubmit}
+          type="submit"
+          aria-label={isLoading ? "Working on the answer" : "Send"}
           disabled={isLoading || !question.trim()}
-          className="min-h-[52px] shrink-0 cursor-pointer rounded-full bg-accent px-5 py-3 text-sm font-semibold text-white shadow-soft transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-60"
+          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-[10px] bg-accent text-white hover:bg-accentHover disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {isLoading ? "Thinking..." : "Send"}
+          <ArrowUpIcon size={18} />
         </button>
       </div>
-    </section>
+      {helper ? <p className="text-center text-[13px] text-muted">{helper}</p> : null}
+    </form>
   );
 }

@@ -1,5 +1,7 @@
 from typing import Any
 
+from app.core.masking import mask_secrets, mask_value
+
 
 class QueryPipelineError(Exception):
     def __init__(
@@ -17,14 +19,18 @@ class QueryPipelineError(Exception):
         self.stage = stage
         self.retryable = retryable
         self.details = details or {}
+        # Set by the query pipeline: LLM usage spent before the failure (a QueryUsage).
+        self.usage: Any = None
 
     def to_error_payload(self) -> dict[str, Any]:
         return {
             "code": self.code,
-            "message": self.message,
-            "details": {
-                "stage": self.stage,
-                "retryable": self.retryable,
-                **self.details,
-            },
+            "message": mask_secrets(self.message),
+            "details": mask_value(
+                {
+                    "stage": self.stage,
+                    "retryable": self.retryable,
+                    **self.details,
+                }
+            ),
         }

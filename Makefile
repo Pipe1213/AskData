@@ -1,4 +1,4 @@
-.PHONY: docker-up docker-down docker-logs load-dataset reload-schema-cache backend-install backend-dev frontend-install frontend-dev test-backend lint-frontend build-frontend benchmark-backend benchmark-dual verify eval eval-test eval-expected
+.PHONY: docker-up docker-down docker-logs load-dataset reload-schema-cache backend-install backend-dev frontend-install frontend-dev test-backend lint-frontend build-frontend verify eval eval-test eval-expected
 
 DATASET ?= pagila
 LABEL ?= run
@@ -39,14 +39,6 @@ lint-frontend:
 
 build-frontend:
 	cd frontend && npm run build
-
-benchmark-backend:
-	./backend/scripts/load_dataset.sh $(DATASET)
-	cd backend && ASKDATA_BENCHMARK_DATASET=$(DATASET) .venv/bin/python scripts/run_benchmark.py
-
-benchmark-dual:
-	$(MAKE) benchmark-backend DATASET=pagila
-	$(MAKE) benchmark-backend DATASET=retail_ops
 
 verify: test-backend lint-frontend build-frontend
 

@@ -4,9 +4,9 @@ Sends each question for the active dataset to a running backend, compares the an
 the saved gold results in eval/expected.json, and writes per-question results plus a summary.
 
     make load-dataset DATASET=pagila          # then restart or reload the backend schema
-    python eval/score.py --dataset pagila --label baseline
-    python eval/score.py --dataset retail_ops --label baseline
-    python eval/score.py --summarize eval/results/*baseline*.jsonl   # combined table
+    python eval/score.py --dataset pagila --label mine
+    python eval/score.py --dataset retail_ops --label mine
+    python eval/score.py --summarize eval/results/*_mine_*.jsonl   # combined table
 
 Re-score saved responses without calling the backend (e.g. after changing the matcher):
     python eval/score.py --rescore eval/results/<file>.jsonl

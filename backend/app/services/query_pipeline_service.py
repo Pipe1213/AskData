@@ -1,9 +1,16 @@
+import logging
+from decimal import Decimal
+
 from app.core.config import Settings, get_settings
 from app.core.exceptions import QueryPipelineError
 from app.db.metadata_models import DatabaseSchema
 from app.llm.base import LLMClientError
+from app.llm.usage import log_usage, track_llm_usage
 from app.schemas.data_source import PostgresConnectionSettings
 from app.schemas.query import (
+    CannotAnswerPayload,
+    ChartRecommendation,
+    ClarificationPayload,
     ConversationMessage,
     DebugPayload,
     MemoryContext,
@@ -11,6 +18,7 @@ from app.schemas.query import (
     QueryResponse,
     QueryTrace,
     QueryTraceStep,
+    QuestionTriageResult,
 )
 from app.services.dataset_adapters import DatasetAdapter, resolve_dataset_adapter
 from app.services.planner_service import PlannerService
@@ -20,6 +28,8 @@ from app.services.sql_execution_service import SQLExecutionService
 from app.services.sql_generation_service import SQLGenerationService
 from app.services.sql_validation_service import SQLValidationService
 from app.utils.text import significant_tokens
+
+logger = logging.getLogger(__name__)
 
 
 class QueryPipelineService:
@@ -58,6 +68,32 @@ class QueryPipelineService:
         conversation_context: list[ConversationMessage] | None = None,
         memory_context: MemoryContext | None = None,
     ) -> QueryResponse:
+        with track_llm_usage() as usage_meter:
+            try:
+                response = self._run_query(
+                    question=question,
+                    schema=schema,
+                    connection_settings=connection_settings,
+                    conversation_context=conversation_context,
+                    memory_context=memory_context,
+                )
+            except QueryPipelineError as exc:
+                exc.usage = usage_meter.summary()
+                log_usage(exc.usage)
+                raise
+
+        usage = usage_meter.summary()
+        log_usage(usage)
+        return response.model_copy(update={"usage": usage})
+
+    def _run_query(
+        self,
+        question: str,
+        schema: DatabaseSchema | None,
+        connection_settings: PostgresConnectionSettings | None = None,
+        conversation_context: list[ConversationMessage] | None = None,
+        memory_context: MemoryContext | None = None,
+    ) -> QueryResponse:
         normalized_question = question.strip()
         if not normalized_question:
             raise QueryPipelineError(
@@ -85,6 +121,23 @@ class QueryPipelineService:
             memory_context=memory_context,
         )
         trace = self._new_trace(plan)
+        triage_result = self._triage_question(
+            question=normalized_question,
+            schema=schema,
+            conversation_context=normalized_conversation_context,
+            memory_context=memory_context,
+            dataset_adapter=dataset_adapter,
+            plan=plan,
+            trace=trace,
+        )
+        if triage_result is not None and triage_result.decision != "answerable":
+            return self._build_non_answer_response(
+                question=normalized_question,
+                triage_result=triage_result,
+                plan=plan,
+                trace=trace,
+            )
+
         retry_reasons: list[str] = []
         retry_classifications: list[str] = []
         recovery_actions: list[str] = []
@@ -203,6 +256,45 @@ class QueryPipelineService:
                 if original_error is not None:
                     raise original_error
 
+        if self._reads_no_data(plan, attempt, schema):
+            # The model wrote its conclusion as a constant instead of reading a table, usually because
+            # the columns it needed weren't in the schema context. Look wider once, then say so plainly.
+            if "broaden_retrieval" not in recovery_actions:
+                retry_reason = "The query read no table, so AskData broadened the schema search and retried once."
+                retry_reasons.append(retry_reason)
+                retry_classifications.append("constant_only_query")
+                recovery_actions.append("broaden_retrieval")
+                trace.retries.append(retry_reason)
+                trace.stages.append(
+                    QueryTraceStep(stage="retry", label="Retried after a query that read no table")
+                )
+                try:
+                    broader_attempt = self._run_attempt(
+                        question=normalized_question,
+                        schema=schema,
+                        connection_settings=connection_settings,
+                        conversation_context=normalized_conversation_context,
+                        memory_context=memory_context,
+                        dataset_adapter=dataset_adapter,
+                        plan=plan,
+                        broaden=True,
+                        trace=trace,
+                    )
+                    attempt = broader_attempt
+                except QueryPipelineError:
+                    pass
+
+            if self._reads_no_data(plan, attempt, schema):
+                return self._build_non_answer_response(
+                    question=normalized_question,
+                    triage_result=QuestionTriageResult(
+                        decision="unanswerable",
+                        reason=self._constant_only_reason(attempt),
+                    ),
+                    plan=plan,
+                    trace=trace,
+                )
+
         response = self._build_response(
             question=normalized_question,
             schema=schema,
@@ -212,6 +304,7 @@ class QueryPipelineService:
             retry_reasons=retry_reasons,
             retry_classifications=retry_classifications,
             recovery_actions=recovery_actions,
+            connection_settings=connection_settings,
         )
         if self.settings.debug_mode:
             return response.model_copy(
@@ -256,7 +349,6 @@ class QueryPipelineService:
             schema,
             plan=plan,
             memory_context=memory_context,
-            dataset_adapter=dataset_adapter,
             max_tables=8 if broaden else 5,
             max_columns_per_table=10 if broaden else 8,
             broaden=broaden,
@@ -344,6 +436,7 @@ class QueryPipelineService:
         retry_reasons: list[str],
         retry_classifications: list[str],
         recovery_actions: list[str],
+        connection_settings: PostgresConnectionSettings | None = None,
     ) -> QueryResponse:
         used_tables = self._merge_used_tables(
             schema=schema,
@@ -381,6 +474,175 @@ class QueryPipelineService:
                 attempt["pipeline_result"]["repair_warnings"]
                 or attempt["semantic_review_warnings"]
             ),
+            plan=plan,
+            trace=trace,
+            assumptions=attempt["pipeline_result"]["generation_result"].assumptions,
+            data_coverage=(
+                self._describe_data_coverage(used_tables, schema, connection_settings)
+                if execution_result.row_count == 0
+                else []
+            ),
+        )
+
+    def _describe_data_coverage(
+        self,
+        used_tables: list[str],
+        schema: DatabaseSchema,
+        connection_settings: PostgresConnectionSettings | None,
+        max_tables: int = 2,
+        max_columns_per_table: int = 3,
+    ) -> list[str]:
+        """Date ranges of the tables an empty answer used, so the answer can say what the data covers."""
+        tables_by_name = {table.full_name: table for table in schema.tables}
+        coverage: list[str] = []
+
+        for full_name in used_tables[:max_tables]:
+            table = tables_by_name.get(full_name)
+            if table is None:
+                continue
+            date_columns = [
+                column.name
+                for column in table.columns
+                if column.data_type.startswith(("date", "timestamp"))
+                and not any(marker in column.name.lower() for marker in ("update", "modified"))
+            ][:max_columns_per_table]
+            if not date_columns:
+                continue
+
+            # Distinct aliases: result rows are built from dicts, so repeated names would collapse.
+            selects = ", ".join(
+                f"MIN({_quote_identifier(name)})::date::text AS earliest_{index}, "
+                f"MAX({_quote_identifier(name)})::date::text AS latest_{index}"
+                for index, name in enumerate(date_columns)
+            )
+            sql = (
+                f"SELECT {selects} FROM {_quote_identifier(table.schema_name)}.{_quote_identifier(table.table_name)}"
+            )
+            try:
+                result = self.sql_execution_service.execute_sql(sql, connection_settings=connection_settings)
+            except Exception:
+                logger.warning("Could not read date coverage for %s.", full_name, exc_info=True)
+                continue
+            if not result.success or not result.rows:
+                continue
+
+            values = result.rows[0]
+            for index, name in enumerate(date_columns):
+                earliest, latest = values[2 * index], values[2 * index + 1]
+                if earliest and latest:
+                    label = f"{table.table_name.replace('_', ' ')} {name.replace('_', ' ')}"
+                    coverage.append(f"{label} from {earliest} to {latest}")
+
+        return coverage
+
+    def _triage_question(
+        self,
+        question: str,
+        schema: DatabaseSchema,
+        conversation_context: list[ConversationMessage],
+        memory_context: MemoryContext | None,
+        dataset_adapter: DatasetAdapter,
+        plan: QueryPlan,
+        trace: QueryTrace,
+    ) -> QuestionTriageResult | None:
+        """Decide answer / clarify / decline before any SQL; None means "answer" (fail open)."""
+        if not hasattr(self.sql_generation_service, "triage_question"):
+            return None
+
+        retrieval_context = self.retrieval_service.retrieve_schema_context(
+            self._build_retrieval_question(question, conversation_context),
+            schema,
+            plan=plan,
+            memory_context=memory_context,
+            max_tables=8,
+            max_columns_per_table=10,
+            broaden=True,
+        )
+        if not retrieval_context.tables:
+            return None
+
+        try:
+            result = self.sql_generation_service.triage_question(
+                question=question,
+                schema_context=retrieval_context,
+                schema=schema,
+                conversation_context=conversation_context,
+            )
+        except LLMClientError:
+            logger.warning("Question triage failed; continuing to SQL generation.", exc_info=True)
+            return None
+
+        options = [option.strip() for option in result.options if option.strip()][:4]
+        alternatives = [item.strip() for item in result.alternatives if item.strip()][:2]
+        decision = result.decision
+        if decision == "ambiguous" and (len(options) < 2 or not result.clarification_question.strip()):
+            # Without a question and at least two options there is nothing to ask; answer instead.
+            decision = "answerable"
+        if decision == "unanswerable" and not result.reason.strip():
+            decision = "answerable"
+
+        trace.stages.append(
+            QueryTraceStep(
+                stage="triage",
+                label={
+                    "answerable": "Checked the question can be answered",
+                    "ambiguous": "Asked which reading was meant",
+                    "unanswerable": "Found the data can't answer this",
+                }[decision],
+                detail=result.reason.strip() or None,
+            )
+        )
+        return result.model_copy(
+            update={
+                "decision": decision,
+                "reason": result.reason.strip(),
+                "clarification_question": result.clarification_question.strip(),
+                "options": options,
+                "alternatives": alternatives,
+            }
+        )
+
+    def _build_non_answer_response(
+        self,
+        question: str,
+        triage_result: QuestionTriageResult,
+        plan: QueryPlan,
+        trace: QueryTrace,
+    ) -> QueryResponse:
+        clarification = None
+        cannot_answer = None
+        if triage_result.decision == "ambiguous":
+            clarification = ClarificationPayload(
+                question=triage_result.clarification_question,
+                options=triage_result.options,
+            )
+            # Plain-text form for clients that only show answer_summary (and for session history).
+            answer_summary = " ".join(
+                [
+                    clarification.question,
+                    *[f"({index}) {option}" for index, option in enumerate(clarification.options, start=1)],
+                ]
+            )
+            response_type = "clarification"
+        else:
+            cannot_answer = CannotAnswerPayload(
+                reason=triage_result.reason,
+                alternatives=triage_result.alternatives,
+            )
+            answer_summary = cannot_answer.reason
+            if cannot_answer.alternatives:
+                answer_summary += " You could ask: " + " / ".join(cannot_answer.alternatives)
+            response_type = "cannot_answer"
+
+        return QueryResponse(
+            question=question,
+            response_type=response_type,
+            clarification=clarification,
+            cannot_answer=cannot_answer,
+            answer_summary=answer_summary,
+            generated_sql="",
+            chart_recommendation=ChartRecommendation(type="table_only"),
+            primary_artifact="summary",
             plan=plan,
             trace=trace,
         )
@@ -818,11 +1080,52 @@ class QueryPipelineService:
         attempt: dict,
         recovery_actions: list[str],
     ) -> bool:
-        if attempt["pipeline_result"]["execution_result"].row_count != 0:
+        execution_result = attempt["pipeline_result"]["execution_result"]
+        if execution_result.row_count != 0 and not self._has_only_empty_measures(execution_result.rows):
             return False
         if "reinterpret_relative_time" in recovery_actions:
             return False
         return self._has_relative_time_phrase(question)
+
+    def _reads_no_data(self, plan: QueryPlan, attempt: dict, schema: DatabaseSchema) -> bool:
+        """True when a data question was answered by a query that reads no table (only constants).
+
+        Questions about the schema itself are answered that way on purpose (table names as text),
+        so they are left alone: by task type, or when a value names a table as schema.table.
+        """
+        if plan.task_type == "schema_lookup":
+            return False
+        if attempt["pipeline_result"]["validation_result"].detected_tables:
+            return False
+        full_names = {table.full_name.lower() for table in schema.tables}
+        for row in attempt["pipeline_result"]["execution_result"].rows:
+            for value in row:
+                text = str(value).lower()
+                if any(name in text for name in full_names):
+                    return False
+        return True
+
+    def _constant_only_reason(self, attempt: dict) -> str:
+        rows = attempt["pipeline_result"]["execution_result"].rows
+        if len(rows) == 1 and len(rows[0]) == 1 and isinstance(rows[0][0], str) and 0 < len(rows[0][0]) <= 300:
+            return rows[0][0].strip()
+        return "I couldn't find columns in this database that hold what this question asks for."
+
+    def _has_only_empty_measures(self, rows: list[list]) -> bool:
+        """True when rows exist but every numeric value is 0 or missing (e.g. a zero-filled calendar)."""
+        saw_measure_cell = False
+        for row in rows:
+            for value in row:
+                if isinstance(value, bool):
+                    continue
+                if value is None:
+                    saw_measure_cell = True
+                    continue
+                if isinstance(value, (int, float, Decimal)):
+                    saw_measure_cell = True
+                    if value != 0:
+                        return False
+        return saw_measure_cell
 
     def _has_relative_time_phrase(self, question: str) -> bool:
         normalized = question.lower()
@@ -849,3 +1152,7 @@ class QueryPipelineService:
         if exc.code == "sql_execution_failed":
             return "execution_failure"
         return "retryable_failure"
+
+
+def _quote_identifier(name: str) -> str:
+    return '"' + name.replace('"', '""') + '"'

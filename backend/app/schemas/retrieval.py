@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field
 class RetrievedColumn(BaseModel):
     name: str
     data_type: str
+    description: str | None = None
     score: float
 
 
@@ -11,6 +12,7 @@ class RetrievedTable(BaseModel):
     schema_name: str
     table_name: str
     full_name: str
+    description: str | None = None
     score: float
     selected_columns: list[RetrievedColumn] = Field(default_factory=list)
     related_tables: list[str] = Field(default_factory=list)
@@ -37,3 +39,5 @@ class RetrievedSchemaContext(BaseModel):
     relationships: list[RetrievedRelationship] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     intent_hints: RetrievalIntentHints = Field(default_factory=RetrievalIntentHints)
+    # Foreign-key paths (lists of table full names) that connect retrieved tables only through others.
+    join_paths: list[list[str]] = Field(default_factory=list)

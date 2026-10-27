@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field
 
 
 PrimaryArtifact = Literal["summary", "table", "chart", "chart_and_table"]
+ResponseType = Literal["answer", "clarification", "cannot_answer"]
 
 
 class QueryPlan(BaseModel):
@@ -31,7 +32,7 @@ class QueryPlan(BaseModel):
 
 
 class QueryTraceStep(BaseModel):
-    stage: Literal["plan", "retrieve", "retry", "repair", "execute"]
+    stage: Literal["plan", "triage", "retrieve", "retry", "repair", "execute"]
     label: str
     detail: str | None = None
 
@@ -77,12 +78,31 @@ class SQLGenerationResult(BaseModel):
     sql: str
     used_tables: list[str] = Field(default_factory=list)
     notes: list[str] = Field(default_factory=list)
+    assumptions: list[str] = Field(default_factory=list)
 
 
 class SQLSemanticReviewResult(BaseModel):
     should_rewrite: bool = False
     issues: list[str] = Field(default_factory=list)
     suggested_focus: str | None = None
+
+
+class QuestionTriageResult(BaseModel):
+    decision: Literal["answerable", "ambiguous", "unanswerable"]
+    reason: str = ""
+    clarification_question: str = ""
+    options: list[str] = Field(default_factory=list)
+    alternatives: list[str] = Field(default_factory=list)
+
+
+class ClarificationPayload(BaseModel):
+    question: str
+    options: list[str] = Field(default_factory=list)
+
+
+class CannotAnswerPayload(BaseModel):
+    reason: str
+    alternatives: list[str] = Field(default_factory=list)
 
 
 class QueryRequest(BaseModel):
@@ -119,9 +139,23 @@ class DebugPayload(BaseModel):
     inherited_turn_ids: list[str] = Field(default_factory=list)
 
 
+class QueryUsage(BaseModel):
+    llm_calls: int = 0
+    input_tokens: int = 0
+    cached_input_tokens: int = 0
+    output_tokens: int = 0
+    reasoning_tokens: int = 0
+    cost_usd: float | None = None
+    unpriced_models: list[str] = Field(default_factory=list)
+
+
 class QueryResponse(BaseModel):
     question: str
+    response_type: ResponseType = "answer"
+    clarification: ClarificationPayload | None = None
+    cannot_answer: CannotAnswerPayload | None = None
     answer_summary: str
+    assumptions: list[str] = Field(default_factory=list)
     generated_sql: str
     columns: list[str] = Field(default_factory=list)
     rows: list[list[Any]] = Field(default_factory=list)
@@ -139,6 +173,7 @@ class QueryResponse(BaseModel):
     plan: QueryPlan | None = None
     trace: QueryTrace | None = None
     debug: DebugPayload | None = None
+    usage: QueryUsage | None = None
 
 
 class ErrorPayload(BaseModel):
@@ -157,3 +192,4 @@ class QueryErrorResponse(BaseModel):
     plan: QueryPlan | None = None
     trace: QueryTrace | None = None
     debug: DebugPayload | None = None
+    usage: QueryUsage | None = None

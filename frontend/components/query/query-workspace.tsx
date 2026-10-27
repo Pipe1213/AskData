@@ -1,381 +1,221 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import type { ReactNode } from "react";
 
-import { ChartPanel } from "@/components/result/chart-panel";
-import { ResultsTable } from "@/components/result/results-table";
-import { SqlPanel } from "@/components/result/sql-panel";
-import { UsedTablesPanel } from "@/components/result/used-tables-panel";
-import { canRenderChart } from "@/lib/chart";
-import type { ConversationTurn, QueryTrace } from "@/lib/types";
+import { HowIGotThis } from "@/components/result/how-i-got-this";
+import { ResultCard } from "@/components/result/result-card";
+import { AlertIcon, QuestionIcon } from "@/components/ui/icons";
+import type { ConversationTurn, QueryResponse } from "@/lib/types";
 
 type QueryWorkspaceProps = {
   turns: ConversationTurn[];
-  isLoading: boolean;
-  allowTurnActions?: boolean;
-  onRerunTurn: (turnId: string, question: string) => void;
-  onExportTurn: (turnId: string) => void;
+  busy: boolean;
+  allowRunAgain: boolean;
+  onAsk: (question: string) => void;
+  onRunAgain: (turnId: string, question: string) => void;
+  onDownloadCsv: (turn: Extract<ConversationTurn, { status: "success" }>) => void;
 };
 
 export function QueryWorkspace({
   turns,
-  isLoading,
-  allowTurnActions = true,
-  onRerunTurn,
-  onExportTurn,
+  busy,
+  allowRunAgain,
+  onAsk,
+  onRunAgain,
+  onDownloadCsv,
 }: QueryWorkspaceProps) {
-  const conversationEndRef = useRef<HTMLDivElement | null>(null);
+  const endRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    conversationEndRef.current?.scrollIntoView({
-      behavior: "smooth",
-      block: "end",
-    });
-  }, [turns.length, isLoading]);
+    endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [turns]);
 
   return (
-    <section className="h-full overflow-y-auto px-4 py-5 md:px-6 md:py-6">
-      <div className="space-y-5">
-        {turns.length === 0 && !isLoading ? (
-          <div className="flex min-h-full items-center justify-center py-16">
-            <p className="max-w-[30ch] text-center font-serif text-3xl leading-tight tracking-[-0.03em] text-ink md:text-4xl">
-              Ask a question in plain language. Inspect only the detail you need.
-            </p>
-          </div>
-        ) : null}
+    <div className="flex w-full max-w-conversation flex-col gap-6" aria-live="polite">
+      {turns.map((turn, index) => (
+        <div key={turn.id} className="flex flex-col gap-6">
+          {index > 0 ? <hr className="m-0 border-0 border-t border-line" /> : null}
+          <p className="m-0 max-w-[80%] self-end rounded-[14px] bg-bubble px-4 py-3 text-[15px] leading-snug">
+            {turn.question}
+          </p>
+          {turn.status === "loading" ? <LoadingReply /> : null}
+          {turn.status === "error" ? <ErrorReply message={turn.error.error.message} /> : null}
+          {turn.status === "success" ? (
+            <Reply
+              turn={turn}
+              busy={busy}
+              allowRunAgain={allowRunAgain}
+              onAsk={onAsk}
+              onRunAgain={onRunAgain}
+              onDownloadCsv={onDownloadCsv}
+            />
+          ) : null}
+        </div>
+      ))}
+      <div ref={endRef} />
+    </div>
+  );
+}
 
-        {turns.map((turn) => (
-          <div key={turn.id} className="space-y-4">
-            <UserBubble>{turn.question}</UserBubble>
+function Reply({
+  turn,
+  busy,
+  allowRunAgain,
+  onAsk,
+  onRunAgain,
+  onDownloadCsv,
+}: {
+  turn: Extract<ConversationTurn, { status: "success" }>;
+  busy: boolean;
+  allowRunAgain: boolean;
+  onAsk: (question: string) => void;
+  onRunAgain: (turnId: string, question: string) => void;
+  onDownloadCsv: (turn: Extract<ConversationTurn, { status: "success" }>) => void;
+}) {
+  const response = turn.response;
 
-            {turn.status === "loading" ? <LoadingReply /> : null}
-            {turn.status === "error" ? <ErrorReply warnings={turn.error.warnings} message={turn.error.error.message} /> : null}
-            {turn.status === "success" ? (
-              <SuccessReply
-                turn={turn}
-                allowTurnActions={allowTurnActions}
-                onExportTurn={onExportTurn}
-                onRerunTurn={onRerunTurn}
-              />
-            ) : null}
-          </div>
-        ))}
+  if (response.response_type === "clarification" && response.clarification) {
+    return <ClarificationReply clarification={response.clarification} busy={busy} onAsk={onAsk} />;
+  }
+  if (response.response_type === "cannot_answer" && response.cannot_answer) {
+    return <CannotAnswerReply cannotAnswer={response.cannot_answer} busy={busy} onAsk={onAsk} />;
+  }
 
-        <div ref={conversationEndRef} />
+  const assumptions = response.assumptions ?? [];
+  const showCard = hasResultCard(response);
+
+  return (
+    <div className="flex flex-col gap-[18px]">
+      <p className="m-0 text-lg font-medium leading-[1.45] md:text-xl">{response.answer_summary}</p>
+      {assumptions.length > 0 ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-[13px] text-muted">I assumed:</span>
+          {assumptions.map((assumption) => (
+            <span key={assumption} className="rounded-full border border-line bg-surface px-2.5 py-1 text-[13px] leading-snug">
+              {assumption}
+            </span>
+          ))}
+        </div>
+      ) : null}
+      {showCard ? <ResultCard response={response} onDownloadCsv={() => onDownloadCsv(turn)} /> : null}
+      {response.generated_sql ? (
+        <HowIGotThis
+          response={response}
+          durationMs={turn.duration_ms}
+          onRunAgain={allowRunAgain && !busy ? () => onRunAgain(turn.id, turn.question) : undefined}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+/** Single values and empty results are fully said by the sentence. */
+function hasResultCard(response: QueryResponse): boolean {
+  if (response.row_count === 0 || response.rows.length === 0) {
+    return false;
+  }
+  const singleValue = response.rows.length === 1 && response.columns.length <= 2;
+  return !singleValue;
+}
+
+function ClarificationReply({
+  clarification,
+  busy,
+  onAsk,
+}: {
+  clarification: { question: string; options: string[] };
+  busy: boolean;
+  onAsk: (question: string) => void;
+}) {
+  return (
+    <div className="flex flex-col gap-3.5">
+      <div className="section-label flex items-center gap-2 text-info">
+        <QuestionIcon />
+        Question before answering
       </div>
-    </section>
+      <p className="m-0 text-lg leading-normal">{clarification.question}</p>
+      <div className="flex flex-wrap gap-2">
+        {clarification.options.map((option) => (
+          <button
+            key={option}
+            type="button"
+            disabled={busy}
+            onClick={() => onAsk(option)}
+            className="min-h-11 rounded-[10px] border border-info bg-surface px-4 py-2 text-left text-sm font-medium text-info hover:bg-infoBg disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {option}
+          </button>
+        ))}
+      </div>
+      <p className="m-0 text-[13px] text-muted">Or type what you mean below.</p>
+    </div>
   );
 }
 
-type FrameProps = {
-  children: ReactNode;
-  tone?: "default" | "warning";
-};
+function CannotAnswerReply({
+  cannotAnswer,
+  busy,
+  onAsk,
+}: {
+  cannotAnswer: { reason: string; alternatives: string[] };
+  busy: boolean;
+  onAsk: (question: string) => void;
+}) {
+  const reason = cannotAnswer.reason
+    .trim()
+    .replace(/,?\s*so I didn['’]t run a query\.?$/i, "")
+    .replace(/[.\s]+$/, "");
 
-function AssistantFrame({ children, tone = "default" }: FrameProps) {
   return (
-    <article
-      className={`mr-auto max-w-[920px] rounded-[30px] border px-5 py-5 shadow-soft md:px-6 md:py-6 ${
-        tone === "warning"
-          ? "border-[#e6c3ad] bg-[#fff4ed]"
-          : "border-line bg-white/88"
-      }`}
-    >
-      {children}
-    </article>
-  );
-}
-
-function UserBubble({ children }: { children: string }) {
-  return (
-    <article className="ml-auto max-w-[820px] rounded-[28px] bg-accent px-5 py-4 text-sm leading-7 text-white shadow-soft md:px-6">
-      {children}
-    </article>
+    <div className="flex flex-col gap-3.5">
+      <div className="section-label flex items-center gap-2 text-warn">
+        <AlertIcon />
+        The data can&apos;t answer this
+      </div>
+      <p className="m-0 text-lg leading-normal">{reason}, so I didn&apos;t run a query.</p>
+      {cannotAnswer.alternatives.length > 0 ? (
+        <div className="flex flex-col gap-2">
+          <span className="text-sm text-muted">I can answer instead:</span>
+          <div className="flex flex-wrap gap-2">
+            {cannotAnswer.alternatives.map((alternative) => (
+              <button
+                key={alternative}
+                type="button"
+                disabled={busy}
+                onClick={() => onAsk(alternative)}
+                className="min-h-11 rounded-[10px] border border-inputLine bg-surface px-4 py-2 text-left text-sm font-medium text-ink hover:border-muted disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {alternative}
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </div>
   );
 }
 
 function LoadingReply() {
   return (
-    <AssistantFrame>
-      <div className="flex items-center gap-4">
-        <div className="flex items-center gap-2">
-          <span className="typing-dot" />
-          <span className="typing-dot animation-delay-150" />
-          <span className="typing-dot animation-delay-300" />
-        </div>
-        <p className="text-sm leading-6 text-muted">
-          AskData is preparing the next answer.
-        </p>
-      </div>
-    </AssistantFrame>
+    <div className="flex items-center gap-3 text-sm text-muted" role="status">
+      <span className="flex items-center gap-1.5" aria-hidden="true">
+        <span className="typing-dot" />
+        <span className="typing-dot animation-delay-150" />
+        <span className="typing-dot animation-delay-300" />
+      </span>
+      Reading the data…
+    </div>
   );
 }
 
-function ErrorReply({
-  message,
-  warnings,
-}: {
-  message: string;
-  warnings: string[];
-}) {
+function ErrorReply({ message }: { message: string }) {
   return (
-    <AssistantFrame tone="warning">
-      <h3 className="text-xl font-semibold text-ink">
-        I could not answer that cleanly
-      </h3>
-      <p className="mt-3 text-sm leading-7 text-muted md:text-base">
-        {message}
-      </p>
-      {warnings.length > 0 ? (
-        <div className="mt-5 flex flex-wrap gap-2">
-          {warnings.map((warning, index) => (
-            <span key={`${warning}-${index}`} className="chip">
-              {warning}
-            </span>
-          ))}
-        </div>
-      ) : null}
-    </AssistantFrame>
-  );
-}
-
-function SuccessReply({
-  turn,
-  allowTurnActions,
-  onRerunTurn,
-  onExportTurn,
-}: {
-  turn: Extract<ConversationTurn, { status: "success" }>;
-  allowTurnActions: boolean;
-  onRerunTurn: (turnId: string, question: string) => void;
-  onExportTurn: (turnId: string) => void;
-}) {
-  const queryResult = turn.response;
-  const shouldShowChart =
-    canRenderChart(queryResult.chart_recommendation) && queryResult.rows.length > 0;
-  const isNoResult = queryResult.row_count === 0;
-  const trace = queryResult.trace;
-  const primaryArtifact = queryResult.primary_artifact;
-  const showPrimaryTable =
-    !isNoResult && (primaryArtifact === "table" || primaryArtifact === "chart_and_table");
-  const showPrimaryChart =
-    !isNoResult &&
-    shouldShowChart &&
-    (primaryArtifact === "chart" || primaryArtifact === "chart_and_table");
-  const showTableDetails =
-    !isNoResult &&
-    !showPrimaryTable &&
-    queryResult.rows.length > 0;
-  const showChartDetails =
-    !isNoResult &&
-    !showPrimaryChart &&
-    shouldShowChart;
-  const footerMeta = [
-    queryResult.row_count === 0 ? "no matching rows" : `${queryResult.row_count} rows`,
-    queryResult.repaired ? "repaired once" : null,
-    queryResult.created_at ? formatTurnTime(queryResult.created_at) : null,
-  ].filter(Boolean);
-  const hasDetails =
-    Boolean(showChartDetails) ||
-    Boolean(showTableDetails) ||
-    Boolean(queryResult.generated_sql) ||
-    queryResult.used_tables.length > 0 ||
-    Boolean(trace);
-
-  return (
-    <AssistantFrame>
-      <div className="space-y-5">
-        <div className="space-y-3">
-          <h3 className="max-w-[28ch] font-serif text-[1.85rem] leading-tight tracking-[-0.035em] text-ink md:text-[2.2rem]">
-            {queryResult.answer_summary}
-          </h3>
-        </div>
-
-        {showPrimaryChart ? (
-          <ChartPanel
-            chartRecommendation={queryResult.chart_recommendation}
-            columns={queryResult.columns}
-            rows={queryResult.rows}
-            isLoading={false}
-            variant="inline"
-          />
-        ) : null}
-
-        {showPrimaryTable ? (
-          <ResultsTable
-            columns={queryResult.columns}
-            rows={queryResult.rows}
-            totalRowCount={queryResult.row_count}
-            isLoading={false}
-            variant="inline"
-          />
-        ) : null}
-
-        {isNoResult ? (
-          <div className="rounded-[20px] border border-line bg-[#fffdf9] px-5 py-5">
-            <p className="text-sm font-semibold text-ink">No matching data</p>
-            <p className="mt-3 text-sm leading-7 text-muted md:text-base">
-              The query completed successfully, but it did not find rows matching the current
-              filters.
-            </p>
-          </div>
-        ) : null}
-
-        {allowTurnActions ? (
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
-            <button
-              type="button"
-              onClick={() => onRerunTurn(turn.id, turn.question)}
-              className="font-medium text-accent transition hover:opacity-75"
-            >
-              Rerun
-            </button>
-            <button
-              type="button"
-              onClick={() => onExportTurn(turn.id)}
-              className="font-medium text-accent transition hover:opacity-75"
-            >
-              Export CSV
-            </button>
-          </div>
-        ) : null}
-
-        {hasDetails ? (
-          <details className="rounded-[18px] border border-line/80 bg-[#fffdf9] px-4 py-3">
-            <summary className="flex cursor-pointer list-none items-center gap-3 text-sm font-medium text-accent">
-              <span>Details</span>
-              <span className="text-xs font-medium uppercase tracking-[0.12em] text-muted">
-                SQL, lineage, trace
-              </span>
-            </summary>
-            <div className="mt-4 space-y-4">
-              {showChartDetails ? (
-                <ChartPanel
-                  chartRecommendation={queryResult.chart_recommendation}
-                  columns={queryResult.columns}
-                  rows={queryResult.rows}
-                  isLoading={false}
-                  variant="embedded"
-                />
-              ) : null}
-
-              {showTableDetails ? (
-                <ResultsTable
-                  columns={queryResult.columns}
-                  rows={queryResult.rows}
-                  totalRowCount={queryResult.row_count}
-                  isLoading={false}
-                  variant="embedded"
-                />
-              ) : null}
-
-              {queryResult.generated_sql ? (
-                <SqlPanel
-                  sql={queryResult.generated_sql}
-                  isLoading={false}
-                  variant="inline"
-                />
-              ) : null}
-
-              {queryResult.used_tables.length > 0 ? (
-                <UsedTablesPanel
-                  title="Tables used for this answer"
-                  description="These tables were reported by the backend after validation and execution."
-                  tables={queryResult.used_tables}
-                  variant="inline"
-                />
-              ) : null}
-
-              {trace ? <TraceDetails trace={trace} /> : null}
-            </div>
-          </details>
-        ) : null}
-
-        {footerMeta.length > 0 ? (
-          <div className="flex flex-wrap gap-x-4 gap-y-2 text-xs text-muted">
-            {footerMeta.map((item) => (
-              <span key={item}>{item}</span>
-            ))}
-          </div>
-        ) : null}
+    <div className="flex flex-col gap-2 rounded-[14px] border border-dangerLine bg-dangerBg px-4 py-3 md:px-5">
+      <div className="section-label flex items-center gap-2 text-danger">
+        <AlertIcon />
+        Something went wrong
       </div>
-    </AssistantFrame>
-  );
-}
-
-function formatTurnTime(createdAt: string): string {
-  const date = new Date(createdAt);
-  if (Number.isNaN(date.getTime())) {
-    return "saved";
-  }
-
-  return date.toLocaleString(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
-}
-
-function TraceDetails({ trace }: { trace: QueryTrace }) {
-  return (
-    <section className="space-y-3 rounded-[20px] border border-line bg-white/80 px-4 py-4">
-      <div className="space-y-1">
-        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted">
-          How AskData approached this
-        </p>
-        <p className="text-sm leading-7 text-muted md:text-base">{trace.interpreted_goal}</p>
-      </div>
-      <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted">
-        {trace.confidence} confidence
-      </p>
-      {trace.memory_summary ? (
-        <p className="text-sm leading-7 text-muted">{trace.memory_summary}</p>
-      ) : null}
-      {trace.schema_focus.length > 0 ? (
-        <div className="space-y-2">
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted">
-            Schema focus
-          </p>
-          <div className="flex flex-wrap gap-2">
-            {trace.schema_focus.map((focus) => (
-              <span key={focus} className="chip">
-                {focus}
-              </span>
-            ))}
-          </div>
-        </div>
-      ) : null}
-      {trace.retries.length > 0 ? (
-        <div className="space-y-2">
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted">
-            Retries
-          </p>
-          <div className="space-y-2">
-            {trace.retries.map((retry, index) => (
-              <p key={`${retry}-${index}`} className="text-sm leading-7 text-muted">
-                {retry}
-              </p>
-            ))}
-          </div>
-        </div>
-      ) : null}
-      <div className="space-y-2">
-        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted">
-          Trace
-        </p>
-        <div className="space-y-3">
-          {trace.stages.map((step, index) => (
-            <div key={`${step.stage}-${index}`} className="space-y-1">
-              <p className="text-sm font-semibold text-ink">{step.label}</p>
-              {step.detail ? (
-                <p className="text-sm leading-7 text-muted">{step.detail}</p>
-              ) : null}
-            </div>
-          ))}
-        </div>
-      </div>
-    </section>
+      <p className="m-0 text-[15px] leading-normal text-ink">{message}</p>
+    </div>
   );
 }

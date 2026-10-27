@@ -106,7 +106,7 @@ def test_response_formatter_returns_clear_no_result_summary() -> None:
         warnings=[],
     )
 
-    assert "successfully" in response.answer_summary.lower()
+    assert response.answer_summary == "Nothing in the data matched this question."
     assert response.chart_recommendation.type == "table_only"
 
 
@@ -265,3 +265,151 @@ def test_response_formatter_keeps_schema_lookup_on_summary() -> None:
     )
 
     assert response.primary_artifact == "summary"
+
+
+class FixedSummaryLLMClient(BaseLLMClient):
+    def __init__(self, text: str) -> None:
+        self.text = text
+        self.last_messages = None
+
+    def generate_text(self, messages, config=None):
+        self.last_messages = messages
+        return SimpleNamespace(text=self.text)
+
+    def generate_structured(self, messages, response_model, config=None):
+        raise NotImplementedError
+
+
+def _ranking_result(row_count: int = 10) -> SQLExecutionResult:
+    rows = [[526, "KARL", "SEAL", Decimal("221.55")], [148, "ELEANOR", "HUNT", Decimal("216.54")]]
+    rows += [[100 + index, "NAME", "LAST", Decimal("174.66")] for index in range(row_count - 2)]
+    return SQLExecutionResult(
+        sql="SELECT ...",
+        success=True,
+        columns=["customer_id", "first_name", "last_name", "total_spent"],
+        rows=rows,
+        row_count=row_count,
+    )
+
+
+def test_summary_with_numbers_from_the_rows_is_kept() -> None:
+    summary = "Karl Seal (customer 526) spent the most: $221.55. The top 10 spent between $174.66 and $221.55."
+    service = ResponseFormatterService(
+        llm_client=FixedSummaryLLMClient(summary),
+        settings=SimpleNamespace(openai_api_key=None),
+    )
+
+    response = service.format_query_response(
+        question="Which 10 customers spent the most in total?",
+        generated_sql="SELECT ...",
+        execution_result=_ranking_result(),
+        used_tables=["public.payment"],
+    )
+
+    assert response.answer_summary == summary
+
+
+def test_summary_with_a_number_not_in_the_result_falls_back_to_the_template() -> None:
+    service = ResponseFormatterService(
+        llm_client=FixedSummaryLLMClient("Karl Seal spent the most: $221.55, which is 12% more than average."),
+        settings=SimpleNamespace(openai_api_key=None),
+    )
+
+    response = service.format_query_response(
+        question="Which 10 customers spent the most in total?",
+        generated_sql="SELECT ...",
+        execution_result=_ranking_result(),
+        used_tables=["public.payment"],
+    )
+
+    assert "12%" not in response.answer_summary
+    assert "KARL" in response.answer_summary
+
+
+def test_summary_prompt_gets_the_row_count_and_up_to_twenty_rows() -> None:
+    client = FixedSummaryLLMClient("Karl Seal spent the most: $221.55.")
+    service = ResponseFormatterService(llm_client=client, settings=SimpleNamespace(openai_api_key=None))
+
+    service.format_query_response(
+        question="Which customers spent the most in total?",
+        generated_sql="SELECT ...",
+        execution_result=_ranking_result(row_count=30),
+        used_tables=["public.payment"],
+        assumptions=["“spent” = total of all payments"],
+    )
+
+    user_prompt = client.last_messages[1].content
+    assert "Result: 30 rows." in user_prompt
+    assert "Result rows (the first 20 of 30 rows):" in user_prompt
+    assert "- “spent” = total of all payments" in user_prompt
+
+
+def test_assumptions_are_trimmed_deduplicated_and_capped_at_three() -> None:
+    service = ResponseFormatterService(settings=SimpleNamespace(openai_api_key=None))
+
+    response = service.format_query_response(
+        question="Which customers spent the most in total?",
+        generated_sql="SELECT ...",
+        execution_result=_ranking_result(),
+        used_tables=["public.payment"],
+        assumptions=[" all dates ", "all dates", "", "spent = payments", "ties by id", "fourth"],
+    )
+
+    assert response.assumptions == ["all dates", "spent = payments", "ties by id"]
+
+
+def test_empty_result_summary_states_the_data_coverage() -> None:
+    service = ResponseFormatterService(settings=SimpleNamespace(openai_api_key=None))
+    execution_result = SQLExecutionResult(sql="SELECT ...", success=True, columns=["id"], rows=[], row_count=0)
+
+    response = service.format_query_response(
+        question="Show signups from the year 1990.",
+        generated_sql="SELECT ...",
+        execution_result=execution_result,
+        used_tables=["public.signup"],
+        data_coverage=["signup created at from 2022-02-14 to 2022-08-23"],
+    )
+
+    assert response.answer_summary == (
+        "Nothing in the data matched this question. "
+        "The data covers signup created at from 2022-02-14 to 2022-08-23."
+    )
+
+
+def test_summary_with_a_date_not_in_the_coverage_falls_back() -> None:
+    service = ResponseFormatterService(
+        llm_client=FixedSummaryLLMClient("No signups matched 1990. Signups run from 2022-02-15 to 2022-02-23."),
+        settings=SimpleNamespace(openai_api_key=None),
+    )
+    execution_result = SQLExecutionResult(sql="SELECT ...", success=True, columns=["id"], rows=[], row_count=0)
+
+    response = service.format_query_response(
+        question="Show signups from the year 1990.",
+        generated_sql="SELECT ...",
+        execution_result=execution_result,
+        used_tables=["public.signup"],
+        data_coverage=["signup created at from 2022-02-14 to 2022-08-23"],
+    )
+
+    assert "2022-02-15" not in response.answer_summary
+    assert "2022-02-14 to 2022-08-23" in response.answer_summary
+
+
+def test_summary_prompt_gives_extremes_over_all_rows_when_only_some_are_shown() -> None:
+    client = FixedSummaryLLMClient("Revenue peaked at 9000 in month 29.")
+    service = ResponseFormatterService(llm_client=client, settings=SimpleNamespace(openai_api_key=None))
+    rows = [[f"month {index}", Decimal(100 + index)] for index in range(30)]
+    rows[29][1] = Decimal("9000")
+
+    service.format_query_response(
+        question="How did revenue change by month?",
+        generated_sql="SELECT ...",
+        execution_result=SQLExecutionResult(
+            sql="SELECT ...", success=True, columns=["month", "revenue"], rows=rows, row_count=30
+        ),
+        used_tables=["public.payment"],
+    )
+
+    user_prompt = client.last_messages[1].content
+    assert "- revenue highest: 9000 (month 29)" in user_prompt
+    assert "- revenue lowest: 100 (month 0)" in user_prompt

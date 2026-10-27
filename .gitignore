@@ -24,3 +24,7 @@ frontend/.env
 frontend/.env.local
 frontend/.env.development.local
 frontend/.env.production.local
+*.tsbuildinfo
+
+# Claude Code local settings
+.claude/

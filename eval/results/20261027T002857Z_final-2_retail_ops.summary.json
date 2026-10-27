@@ -1,0 +1,110 @@
+{
+  "overall": {
+    "questions": 26,
+    "answerable_accuracy": 0.842,
+    "ambiguous_clarified": 0.75,
+    "ambiguous_handled": 0.75,
+    "unanswerable_declined": 1.0,
+    "silent_error_rate": 0.115,
+    "errors": 0,
+    "outcomes": {
+      "answerable": {
+        "correct": 15,
+        "wrong": 3
+      },
+      "ambiguous": {
+        "clarified": 3,
+        "false_refusal": 1
+      },
+      "schema_lookup": {
+        "correct": 1
+      },
+      "unanswerable": {
+        "declined": 3
+      }
+    }
+  },
+  "by_split": {
+    "dev": {
+      "questions": 10,
+      "answerable_accuracy": 0.778,
+      "ambiguous_clarified": 1.0,
+      "ambiguous_handled": 1.0,
+      "unanswerable_declined": null,
+      "silent_error_rate": 0.2,
+      "errors": 0,
+      "outcomes": {
+        "answerable": {
+          "correct": 6,
+          "wrong": 2
+        },
+        "ambiguous": {
+          "clarified": 1
+        },
+        "schema_lookup": {
+          "correct": 1
+        },
+        "unanswerable": {}
+      }
+    },
+    "heldout": {
+      "questions": 16,
+      "answerable_accuracy": 0.9,
+      "ambiguous_clarified": 0.667,
+      "ambiguous_handled": 0.667,
+      "unanswerable_declined": 1.0,
+      "silent_error_rate": 0.062,
+      "errors": 0,
+      "outcomes": {
+        "answerable": {
+          "correct": 9,
+          "wrong": 1
+        },
+        "ambiguous": {
+          "clarified": 2,
+          "false_refusal": 1
+        },
+        "unanswerable": {
+          "declined": 3
+        },
+        "schema_lookup": {}
+      }
+    }
+  },
+  "by_dataset": {
+    "retail_ops": {
+      "questions": 26,
+      "answerable_accuracy": 0.842,
+      "ambiguous_clarified": 0.75,
+      "ambiguous_handled": 0.75,
+      "unanswerable_declined": 1.0,
+      "silent_error_rate": 0.115,
+      "errors": 0,
+      "outcomes": {
+        "answerable": {
+          "correct": 15,
+          "wrong": 3
+        },
+        "ambiguous": {
+          "clarified": 3,
+          "false_refusal": 1
+        },
+        "schema_lookup": {
+          "correct": 1
+        },
+        "unanswerable": {
+          "declined": 3
+        }
+      }
+    }
+  },
+  "latency_s": {
+    "median": 8.82,
+    "p90": 14.55
+  },
+  "cost_usd": {
+    "total": 0.1362,
+    "per_question": 0.00524,
+    "questions_with_usage": 26
+  }
+}

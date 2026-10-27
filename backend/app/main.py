@@ -1,8 +1,10 @@
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.api.routes_data_sources import router as data_sources_router
 from app.api.routes_examples import router as examples_router
@@ -12,6 +14,9 @@ from app.api.routes_schema import router as schema_router
 from app.api.routes_sessions import router as sessions_router
 from app.core.config import get_settings
 from app.core.logging import setup_logging
+from app.core.masking import mask_secrets
+from app.db.connection import get_db_connection
+from app.db.role_safety import find_unsafe_role_privileges
 from app.services.database_target_service import DatabaseTargetService
 from app.services.query_pipeline_service import QueryPipelineService
 from app.services.schema_service import SchemaService
@@ -52,8 +57,40 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.exception("Failed to load schema cache at startup")
 
+    _warn_if_default_database_user_can_write(settings, logger)
+
     yield
     logger.info("Stopping %s", settings.app_name)
+
+
+def _warn_if_default_database_user_can_write(settings, logger: logging.Logger) -> None:
+    try:
+        with get_db_connection(settings) as connection:
+            with connection.cursor() as cursor:
+                problems = find_unsafe_role_privileges(cursor, ["public"])
+    except Exception:
+        logger.warning("Could not check the privileges of the configured database user.", exc_info=True)
+        return
+
+    if problems:
+        logger.warning(
+            "The configured database user %s. Generated SQL still runs in read-only transactions, "
+            "but use a read-only user (POSTGRES_USER=askdata_reader for the local demo).",
+            "; ".join(problems),
+        )
+
+
+async def _validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+    """422 without the submitted values: they can contain passwords or connection URLs."""
+    errors = [
+        {
+            "type": error.get("type"),
+            "loc": list(error.get("loc", [])),
+            "msg": mask_secrets(str(error.get("msg", ""))),
+        }
+        for error in exc.errors()
+    ]
+    return JSONResponse(status_code=422, content={"detail": errors})
 
 
 def create_app() -> FastAPI:
@@ -64,11 +101,12 @@ def create_app() -> FastAPI:
         version=settings.app_version,
         lifespan=lifespan,
     )
+    app.add_exception_handler(RequestValidationError, _validation_error_handler)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_allowed_origins,
         allow_credentials=False,
-        allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
+        allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["*"],
     )
     app.include_router(data_sources_router)

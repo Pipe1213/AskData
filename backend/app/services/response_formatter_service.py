@@ -1,4 +1,7 @@
+import logging
+import re
 from datetime import date, datetime
+from decimal import Decimal, InvalidOperation
 from numbers import Number
 
 from app.core.config import Settings, get_settings
@@ -16,6 +19,12 @@ from app.schemas.query import (
     TurnMemory,
 )
 from app.utils.text import significant_tokens
+
+logger = logging.getLogger(__name__)
+
+MAX_ASSUMPTIONS = 3
+_NUMBER_PATTERN = re.compile(r"\d[\d,]*(?:\.\d+)?")
+_ISO_DATE_PATTERN = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 
 class ResponseFormatterService:
@@ -37,16 +46,21 @@ class ResponseFormatterService:
         repaired: bool = False,
         plan: QueryPlan | None = None,
         trace: QueryTrace | None = None,
+        assumptions: list[str] | None = None,
+        data_coverage: list[str] | None = None,
     ) -> QueryResponse:
         if not execution_result.success:
             raise ValueError("Execution result must be successful before formatting a query response.")
 
         merged_warnings = list(warnings or [])
         merged_warnings.extend(execution_result.warnings)
+        cleaned_assumptions = self._clean_assumptions(assumptions)
         answer_summary = self._build_answer_summary(
             question=question,
             generated_sql=generated_sql,
             execution_result=execution_result,
+            assumptions=cleaned_assumptions,
+            data_coverage=data_coverage or [],
         )
         chart_recommendation = self._recommend_chart(question, execution_result)
         primary_artifact = self._primary_artifact(
@@ -67,6 +81,7 @@ class ResponseFormatterService:
         return QueryResponse(
             question=question,
             answer_summary=answer_summary,
+            assumptions=cleaned_assumptions,
             generated_sql=generated_sql,
             columns=execution_result.columns,
             rows=execution_result.rows,
@@ -86,10 +101,12 @@ class ResponseFormatterService:
         question: str,
         generated_sql: str,
         execution_result: SQLExecutionResult,
+        assumptions: list[str] | None = None,
+        data_coverage: list[str] | None = None,
     ) -> str:
         llm_client = self._get_llm_client()
         if llm_client is None:
-            return self._fallback_summary(question, execution_result)
+            return self._fallback_summary(question, execution_result, data_coverage)
 
         try:
             messages = build_answer_summary_messages(
@@ -97,21 +114,106 @@ class ResponseFormatterService:
                 generated_sql=generated_sql,
                 columns=execution_result.columns,
                 rows=execution_result.rows,
+                row_count=execution_result.row_count,
+                assumptions=assumptions,
+                data_coverage=data_coverage,
             )
             llm_messages = [LLMMessage.model_validate(message) for message in messages]
             response = llm_client.generate_text(
                 messages=llm_messages,
                 config=LLMGenerationConfig(
-                    max_output_tokens=160,
+                    max_output_tokens=220,
                 ),
             )
             summary = response.text.strip()
             if self._is_usable_summary(summary):
-                return summary
+                unsupported = self._unsupported_numbers(
+                    summary,
+                    question=question,
+                    execution_result=execution_result,
+                    data_coverage=data_coverage,
+                )
+                if not unsupported:
+                    return summary
+                logger.warning(
+                    "Summary used numbers not found in the result (%s); using the fallback summary.",
+                    ", ".join(unsupported),
+                )
         except LLMClientError:
             pass
 
-        return self._fallback_summary(question, execution_result)
+        return self._fallback_summary(question, execution_result, data_coverage)
+
+    def _clean_assumptions(self, assumptions: list[str] | None) -> list[str]:
+        cleaned: list[str] = []
+        for assumption in assumptions or []:
+            text = assumption.strip()
+            if text and text not in cleaned:
+                cleaned.append(text)
+        return cleaned[:MAX_ASSUMPTIONS]
+
+    def _unsupported_numbers(
+        self,
+        summary: str,
+        question: str,
+        execution_result: SQLExecutionResult,
+        data_coverage: list[str] | None = None,
+    ) -> list[str]:
+        """Numbers in the summary that appear nowhere in the result, the question or the data coverage.
+
+        Full dates (YYYY-MM-DD) must appear as written; other numbers are matched by value.
+        """
+        supported: set[Decimal] = set()
+        supported_dates: set[str] = set()
+
+        def add_numbers_in(text: str) -> None:
+            supported_dates.update(_ISO_DATE_PATTERN.findall(text))
+            for match in _NUMBER_PATTERN.findall(text):
+                number = self._to_decimal(match)
+                if number is not None:
+                    supported.add(number)
+
+        for row in execution_result.rows:
+            for value in row:
+                if isinstance(value, bool) or value is None:
+                    continue
+                if isinstance(value, Number):
+                    number = self._to_decimal(str(value))
+                    if number is None:
+                        continue
+                    number = abs(number)
+                    supported.update(
+                        {
+                            number,
+                            number.quantize(Decimal("0.01")),
+                            number.quantize(Decimal("0.1")),
+                            number.quantize(Decimal("1")),
+                        }
+                    )
+                else:
+                    add_numbers_in(str(value))
+        add_numbers_in(question)
+        for line in data_coverage or []:
+            add_numbers_in(line)
+        # Counts and rank positions ("the top 10", "3 of the 12 months").
+        largest_count = max(execution_result.row_count, len(execution_result.columns))
+        supported.update(Decimal(count) for count in range(largest_count + 1))
+
+        unsupported = [match for match in _ISO_DATE_PATTERN.findall(summary) if match not in supported_dates]
+        for match in _NUMBER_PATTERN.findall(_ISO_DATE_PATTERN.sub(" ", summary)):
+            number = self._to_decimal(match)
+            if number is None:
+                continue
+            if number in supported or number.quantize(Decimal("0.01")) in supported:
+                continue
+            unsupported.append(match)
+        return unsupported
+
+    def _to_decimal(self, text: str) -> Decimal | None:
+        try:
+            return Decimal(text.replace(",", ""))
+        except InvalidOperation:
+            return None
 
     def _get_llm_client(self) -> BaseLLMClient | None:
         if self.llm_client is not None:
@@ -123,6 +225,7 @@ class ResponseFormatterService:
         self.llm_client = OpenAILLMClient(
             self.settings,
             model=self.settings.resolved_summary_model,
+            reasoning_effort=self.settings.openai_summary_reasoning_effort,
         )
         return self.llm_client
 
@@ -130,11 +233,14 @@ class ResponseFormatterService:
         self,
         question: str,
         execution_result: SQLExecutionResult,
+        data_coverage: list[str] | None = None,
     ) -> str:
         question_tokens = significant_tokens(question)
 
         if execution_result.row_count == 0:
-            return "The query ran successfully but returned no matching rows."
+            if data_coverage:
+                return "Nothing in the data matched this question. The data covers " + "; ".join(data_coverage) + "."
+            return "Nothing in the data matched this question."
 
         if execution_result.row_count == 1 and len(execution_result.columns) == 1:
             value = self._format_value(
@@ -393,9 +499,6 @@ class ResponseFormatterService:
         if question_tokens & average_tokens:
             if any(token in normalized_name for token in ("avg", "average", "mean")):
                 score += 8.0
-
-        if question_tokens & {"rental", "rentals", "rented"} and "count" in normalized_name:
-            score += 4.0
 
         if any(
             token in normalized_name

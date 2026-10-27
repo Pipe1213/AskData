@@ -101,6 +101,8 @@ def _get_target_service(request: Request) -> DatabaseTargetService:
 def _error_response(exc: QueryPipelineError) -> JSONResponse:
     status_map = {
         "connection_test_failed": status.HTTP_400_BAD_REQUEST,
+        "custom_db_disabled": status.HTTP_403_FORBIDDEN,
+        "unsafe_database_role": status.HTTP_403_FORBIDDEN,
         "runtime_target_missing": status.HTTP_409_CONFLICT,
         "schema_introspection_failed": status.HTTP_503_SERVICE_UNAVAILABLE,
         "target_not_selected": status.HTTP_400_BAD_REQUEST,

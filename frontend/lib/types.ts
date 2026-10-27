@@ -32,7 +32,7 @@ export type QueryPlan = {
 };
 
 export type QueryTraceStep = {
-  stage: "plan" | "retrieve" | "retry" | "repair" | "execute";
+  stage: "plan" | "triage" | "retrieve" | "retry" | "repair" | "execute";
   label: string;
   detail?: string | null;
 };
@@ -70,9 +70,26 @@ export type QueryRequest = {
   conversation_context?: ConversationMessage[];
 };
 
+export type ResponseType = "answer" | "clarification" | "cannot_answer";
+
+export type QueryUsage = {
+  llm_calls: number;
+  input_tokens: number;
+  cached_input_tokens: number;
+  output_tokens: number;
+  reasoning_tokens: number;
+  cost_usd?: number | null;
+  unpriced_models: string[];
+};
+
 export type QueryResponse = {
   question: string;
+  response_type?: ResponseType;
+  clarification?: { question: string; options: string[] } | null;
+  cannot_answer?: { reason: string; alternatives: string[] } | null;
   answer_summary: string;
+  assumptions?: string[];
+  usage?: QueryUsage | null;
   generated_sql: string;
   columns: string[];
   rows: Array<Array<unknown>>;
@@ -130,7 +147,7 @@ export type QueryErrorResponse = {
   } | null;
 };
 
-export type SslMode = "disable" | "prefer" | "require";
+export type SslMode = "disable" | "allow" | "prefer" | "require" | "verify-ca" | "verify-full";
 
 export type DataSourceSummary = {
   target_id: string;
@@ -144,20 +161,26 @@ export type DataSourceSummary = {
 };
 
 export type DataSourcesResponse = {
+  custom_db_allowed?: boolean;
   active_target: DataSourceSummary;
   demo_targets: DataSourceSummary[];
   runtime_target?: DataSourceSummary | null;
 };
 
-export type RuntimePostgresConnectionInput = {
-  host: string;
-  port: number;
-  database: string;
-  user: string;
-  password: string;
-  sslmode: SslMode;
-  schema_allowlist?: string[];
-};
+export type RuntimePostgresConnectionInput =
+  | {
+      connection_url: string;
+      schema_allowlist?: string[];
+    }
+  | {
+      host: string;
+      port: number;
+      database: string;
+      user: string;
+      password: string;
+      sslmode: SslMode;
+      schema_allowlist?: string[];
+    };
 
 export type RuntimeConnectionTestResponse = {
   ok: true;
@@ -193,6 +216,7 @@ export type ConversationTurn =
       status: "success";
       response: QueryResponse;
       created_at?: string | null;
+      duration_ms?: number;
     }
   | {
       id: string;
@@ -204,11 +228,6 @@ export type ConversationTurn =
 
 export type ExampleQuestion = {
   question: string;
-};
-
-export type ExamplePromptGroup = {
-  title: string;
-  prompts: string[];
 };
 
 export type SessionSummary = {
@@ -246,7 +265,7 @@ export type SessionDetail = {
 
 export type SchemaTableSummary = {
   name: string;
-  schema_name: string;
+  schema: string;
   description?: string | null;
   columns: Array<{
     name: string;

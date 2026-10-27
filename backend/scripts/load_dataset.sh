@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 DATASET="${1:-pagila}"
 SEED_FILE="${REPO_ROOT}/demo_data/seed/${DATASET}.sql"
+APP_ROLE_FILE="${REPO_ROOT}/backend/scripts/create_app_role.sql"
 ACTIVE_DATASET_FILE="${REPO_ROOT}/demo_data/active_dataset.txt"
 
 if [[ ! -f "${SEED_FILE}" ]]; then
@@ -34,13 +35,19 @@ docker compose exec -T postgres psql \
 DROP SCHEMA IF EXISTS public CASCADE;
 CREATE SCHEMA public;
 GRANT ALL ON SCHEMA public TO postgres;
-GRANT ALL ON SCHEMA public TO public;
+GRANT USAGE ON SCHEMA public TO public;
 SQL
 
 docker compose exec -T postgres psql \
   -U "${POSTGRES_USER}" \
   -d "${POSTGRES_DB}" \
   -v ON_ERROR_STOP=1 < "${SEED_FILE}"
+
+# The app's read-only user (askdata_reader); grants on public are lost when the schema is recreated.
+docker compose exec -T postgres psql \
+  -U "${POSTGRES_USER}" \
+  -d "${POSTGRES_DB}" \
+  -v ON_ERROR_STOP=1 < "${APP_ROLE_FILE}" >/dev/null
 
 printf "%s\n" "${DATASET}" > "${ACTIVE_DATASET_FILE}"
 

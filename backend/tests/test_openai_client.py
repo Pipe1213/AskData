@@ -3,7 +3,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.llm.base import LLMClientError
-from app.llm.openai_client import OpenAILLMClient
+from app.llm.openai_client import REASONING_TOKEN_ALLOWANCE, OpenAILLMClient
 from app.llm.response_models import LLMGenerationConfig
 
 
@@ -46,3 +46,24 @@ def test_build_generation_kwargs_omits_temperature_by_default() -> None:
     kwargs = client._build_generation_kwargs(LLMGenerationConfig(max_output_tokens=2500))
 
     assert kwargs == {"max_output_tokens": 2500}
+
+
+def test_build_generation_kwargs_sends_reasoning_effort_none_without_extra_tokens() -> None:
+    client = OpenAILLMClient.__new__(OpenAILLMClient)
+    client.reasoning_effort = "none"
+
+    kwargs = client._build_generation_kwargs(LLMGenerationConfig(max_output_tokens=160))
+
+    assert kwargs == {"max_output_tokens": 160, "reasoning": {"effort": "none"}}
+
+
+def test_build_generation_kwargs_adds_reasoning_allowance_when_model_reasons() -> None:
+    client = OpenAILLMClient.__new__(OpenAILLMClient)
+    client.reasoning_effort = "low"
+
+    kwargs = client._build_generation_kwargs(LLMGenerationConfig(max_output_tokens=500))
+
+    assert kwargs == {
+        "max_output_tokens": 500 + REASONING_TOKEN_ALLOWANCE,
+        "reasoning": {"effort": "low"},
+    }

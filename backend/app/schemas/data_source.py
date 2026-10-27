@@ -1,9 +1,10 @@
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from psycopg.conninfo import conninfo_to_dict
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
-SslMode = Literal["disable", "prefer", "require"]
+SslMode = Literal["disable", "allow", "prefer", "require", "verify-ca", "verify-full"]
 TargetType = Literal["demo_pagila", "demo_retail_ops", "runtime_postgres"]
 
 
@@ -12,18 +13,50 @@ class PostgresConnectionSettings(BaseModel):
     port: int
     database: str
     user: str
-    password: str
+    password: str = Field(repr=False)
     sslmode: SslMode = "prefer"
 
 
 class RuntimePostgresConnectionInput(BaseModel):
+    """A database to connect: separate fields, or `connection_url` (fields given explicitly win)."""
+
+    connection_url: str | None = Field(default=None, repr=False, exclude=True)
     host: str
     port: int = 5432
     database: str
     user: str
-    password: str
+    password: str = Field(repr=False)
     sslmode: SslMode = "prefer"
     schema_allowlist: list[str] = Field(default_factory=lambda: ["public"])
+
+    @model_validator(mode="before")
+    @classmethod
+    def fill_from_connection_url(cls, data: Any) -> Any:
+        if not isinstance(data, dict) or not data.get("connection_url"):
+            return data
+
+        url = str(data["connection_url"]).strip()
+        if not url.startswith(("postgresql://", "postgres://")):
+            raise ValueError("Connection URL must start with postgresql://")
+        try:
+            parsed = conninfo_to_dict(url)
+        except Exception:
+            # The parser's message can quote parts of the URL, including the password.
+            raise ValueError("Connection URL could not be read.") from None
+
+        from_url = {
+            "host": parsed.get("host"),
+            "port": parsed.get("port"),
+            "database": parsed.get("dbname"),
+            "user": parsed.get("user"),
+            "password": parsed.get("password"),
+            "sslmode": parsed.get("sslmode"),
+        }
+        merged = dict(data)
+        for key, value in from_url.items():
+            if value not in (None, "") and merged.get(key) in (None, ""):
+                merged[key] = value
+        return merged
 
     @field_validator("host", "database", "user", "password")
     @classmethod
@@ -72,6 +105,7 @@ class DataSourceSummary(BaseModel):
 
 
 class DataSourcesResponse(BaseModel):
+    custom_db_allowed: bool = True
     active_target: DataSourceSummary
     demo_targets: list[DataSourceSummary] = Field(default_factory=list)
     runtime_target: DataSourceSummary | None = None

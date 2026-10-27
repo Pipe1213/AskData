@@ -11,14 +11,24 @@ from app.llm.response_models import (
     LLMStructuredResponse,
     LLMTextResponse,
 )
+from app.llm.usage import record_llm_usage
 
 StructuredOutputT = TypeVar("StructuredOutputT", bound=BaseModel)
+
+# Reasoning tokens count toward max_output_tokens. When a reasoning effort other than
+# "none" is set, this is added to each call's cap so the caps keep limiting visible output.
+REASONING_TOKEN_ALLOWANCE = 4000
 
 
 class OpenAILLMClient(BaseLLMClient):
     provider_name = "openai"
 
-    def __init__(self, settings: Settings | None = None, model: str | None = None) -> None:
+    def __init__(
+        self,
+        settings: Settings | None = None,
+        model: str | None = None,
+        reasoning_effort: str | None = None,
+    ) -> None:
         self.settings = settings or get_settings()
 
         if not self.settings.openai_api_key:
@@ -26,6 +36,7 @@ class OpenAILLMClient(BaseLLMClient):
 
         self.client = OpenAI(api_key=self.settings.openai_api_key)
         self.model = model or self.settings.resolved_summary_model
+        self.reasoning_effort = reasoning_effort
 
     def generate_text(
         self,
@@ -43,6 +54,7 @@ class OpenAILLMClient(BaseLLMClient):
         except Exception as exc:
             raise LLMClientError(f"OpenAI text generation failed: {exc}") from exc
 
+        record_llm_usage(self.model, getattr(response, "usage", None))
         text = self._extract_text(response)
         return LLMTextResponse(
             provider=self.provider_name,
@@ -75,6 +87,7 @@ class OpenAILLMClient(BaseLLMClient):
         except Exception as exc:
             raise LLMClientError(f"OpenAI structured generation failed: {exc}") from exc
 
+        record_llm_usage(self.model, getattr(response, "usage", None))
         text = self._extract_text(response)
 
         try:
@@ -131,9 +144,15 @@ class OpenAILLMClient(BaseLLMClient):
 
     def _build_generation_kwargs(self, config: LLMGenerationConfig) -> dict:
         generation_kwargs: dict = {}
+        reasoning_effort = getattr(self, "reasoning_effort", None)
 
         if config.max_output_tokens is not None:
             generation_kwargs["max_output_tokens"] = config.max_output_tokens
+            if reasoning_effort and reasoning_effort != "none":
+                generation_kwargs["max_output_tokens"] += REASONING_TOKEN_ALLOWANCE
+
+        if reasoning_effort:
+            generation_kwargs["reasoning"] = {"effort": reasoning_effort}
 
         if config.temperature is not None:
             generation_kwargs["temperature"] = config.temperature

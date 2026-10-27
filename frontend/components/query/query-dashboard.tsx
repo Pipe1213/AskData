@@ -2,9 +2,12 @@
 
 import { useEffect, useState } from "react";
 
+import { ConnectDatabase } from "@/components/connect/connect-database";
 import { Sidebar } from "@/components/layout/sidebar";
+import type { DashboardView } from "@/components/layout/sidebar";
 import { QuestionForm } from "@/components/query/question-form";
 import { QueryWorkspace } from "@/components/query/query-workspace";
+import { StartScreen } from "@/components/query/start-screen";
 import { SchemaOverview } from "@/components/schema/schema-overview";
 import {
   activateDemoDataSource,
@@ -13,7 +16,7 @@ import {
   disconnectRuntimeDataSource,
   exportSessionTurnCsv,
   fetchDataSources,
-  fetchExampleQuestions,
+  fetchSchemaOverview,
   fetchSessionDetail,
   fetchSessions,
   queryAskData,
@@ -21,208 +24,249 @@ import {
   rerunSessionTurn,
   testRuntimePostgresConnection,
 } from "@/lib/api";
+import { getDatasetCopy, targetLabel } from "@/lib/datasets";
+import { rowsToDelimited } from "@/lib/format";
 import type {
   ConversationMessage,
   ConversationTurn,
   DataSourcesResponse,
-  ExamplePromptGroup,
-  ExampleQuestion,
   QueryErrorResponse,
+  QueryResponse,
   RuntimeConnectionTestResponse,
   RuntimePostgresConnectionInput,
   SessionDetail,
   SessionSummary,
 } from "@/lib/types";
 
-const fallbackPrompts = [
-  "What are the top 10 film categories by total revenue?",
-  "Which customers spent the most in total?",
-  "How much revenue did each staff member process?",
-  "What is the monthly trend of rentals this year?",
-  "Now show only the top 5",
-];
+type SuccessTurn = Extract<ConversationTurn, { status: "success" }>;
 
-type DashboardView = "chat" | "schema";
+type QueryDashboardProps = {
+  initialView?: DashboardView;
+};
 
-export function QueryDashboard() {
-  const [activeView, setActiveView] = useState<DashboardView>("chat");
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+export function QueryDashboard({ initialView = "chat" }: QueryDashboardProps) {
+  const [activeView, setActiveView] = useState<DashboardView>(initialView);
   const [question, setQuestion] = useState("");
   const [turns, setTurns] = useState<ConversationTurn[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [isChangingTarget, setIsChangingTarget] = useState(false);
+  const [targetError, setTargetError] = useState<string | null>(null);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
-  const [examplePromptGroups, setExamplePromptGroups] = useState<ExamplePromptGroup[]>(
-    groupExamples(fallbackPrompts),
-  );
   const [dataSources, setDataSources] = useState<DataSourcesResponse | null>(null);
+  const [tableCount, setTableCount] = useState<number | null>(null);
   const [schemaRefreshKey, setSchemaRefreshKey] = useState(0);
 
   const activeTarget = dataSources?.active_target ?? null;
+  const persistenceAllowed = Boolean(activeTarget?.persistence_allowed);
+  const customDbAllowed = dataSources?.custom_db_allowed ?? true;
+  const copy = getDatasetCopy(activeTarget, tableCount);
+  const busy = isLoading || isChangingTarget;
 
   useEffect(() => {
     let isActive = true;
-
-    async function loadInitialState() {
-      try {
-        const sourceState = await fetchDataSources();
+    fetchDataSources()
+      .then(async (sourceState) => {
         if (!isActive) {
           return;
         }
-
         setDataSources(sourceState);
-
-        const [examples, sessionSummaries] = await Promise.all([
-          fetchExampleQuestions().catch(() => [] as ExampleQuestion[]),
-          sourceState.active_target.persistence_allowed
-            ? fetchSessions().catch(() => [] as SessionSummary[])
-            : Promise.resolve([] as SessionSummary[]),
-        ]);
-        if (!isActive) {
-          return;
+        const sessionSummaries = sourceState.active_target.persistence_allowed
+          ? await fetchSessions().catch(() => [] as SessionSummary[])
+          : [];
+        if (isActive) {
+          setSessions(sessionSummaries);
         }
-
-        const questions = normalizeExamples(examples);
-        if (questions.length > 0) {
-          setExamplePromptGroups(groupExamples(questions));
+      })
+      .catch(() => {
+        if (isActive) {
+          setTargetError("AskData can't reach its server. Start the backend and reload the page.");
         }
-        setSessions(sessionSummaries);
-      } catch {
-        if (!isActive) {
-          return;
-        }
-      }
-    }
-
-    void loadInitialState();
-
+      });
     return () => {
       isActive = false;
     };
   }, []);
 
-  async function handleSubmit() {
-    const trimmedQuestion = question.trim();
-    if (!trimmedQuestion || isLoading) {
+  useEffect(() => {
+    if (activeTarget?.target_type !== "runtime_postgres") {
+      setTableCount(null);
       return;
     }
+    let isActive = true;
+    fetchSchemaOverview()
+      .then((overview) => {
+        if (isActive) {
+          setTableCount(overview.tables.length);
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      isActive = false;
+    };
+  }, [activeTarget?.target_type, activeTarget?.database_name, schemaRefreshKey]);
 
+  async function runTurn(turnQuestion: string, request: () => Promise<QueryResponse>) {
     const localTurnId = createTurnId();
-    const conversationContext = buildConversationContext(turns);
-
+    const startedAt = performance.now();
     setActiveView("chat");
     setIsLoading(true);
-    setQuestion("");
-    setTurns((currentTurns) => [
-      ...currentTurns,
-      {
-        id: localTurnId,
-        question: trimmedQuestion,
-        status: "loading",
-      },
-    ]);
+    setTurns((current) => [...current, { id: localTurnId, question: turnQuestion, status: "loading" }]);
 
     try {
-      const result = await queryAskData({
-        question: trimmedQuestion,
-        session_id: activeTarget?.persistence_allowed ? activeSessionId : null,
-        conversation_context: conversationContext,
+      const result = await request();
+      const durationMs = performance.now() - startedAt;
+      replaceTurn(localTurnId, {
+        id: result.turn_id ?? localTurnId,
+        question: turnQuestion,
+        status: "success",
+        response: result,
+        created_at: result.created_at,
+        duration_ms: durationMs,
       });
-      setTurns((currentTurns) =>
-        currentTurns.map((turn) =>
-          turn.id === localTurnId
-            ? {
-                id: result.turn_id ?? turn.id,
-                question: turn.question,
-                status: "success",
-                response: result,
-                created_at: result.created_at,
-              }
-            : turn,
-        ),
-      );
       if (result.session_id) {
         setActiveSessionId(result.session_id);
       }
       if (result.persisted) {
-        void refreshSessions();
+        void refreshSessions(true);
       }
     } catch (error) {
       const normalizedError = normalizeQueryError(error);
-      setTurns((currentTurns) =>
-        currentTurns.map((turn) =>
-          turn.id === localTurnId
-            ? {
-                id: normalizedError.turn_id ?? turn.id,
-                question: turn.question,
-                status: "error",
-                error: normalizedError,
-                created_at: normalizedError.created_at,
-              }
-            : turn,
-        ),
-      );
+      replaceTurn(localTurnId, {
+        id: normalizedError.turn_id ?? localTurnId,
+        question: turnQuestion,
+        status: "error",
+        error: normalizedError,
+        created_at: normalizedError.created_at,
+      });
       if (normalizedError.session_id) {
         setActiveSessionId(normalizedError.session_id);
       }
       if (normalizedError.persisted) {
-        void refreshSessions();
+        void refreshSessions(true);
       }
     } finally {
       setIsLoading(false);
     }
   }
 
-  async function refreshSessions() {
-    if (!activeTarget?.persistence_allowed) {
+  function replaceTurn(localTurnId: string, nextTurn: ConversationTurn) {
+    setTurns((current) => current.map((turn) => (turn.id === localTurnId ? nextTurn : turn)));
+  }
+
+  function ask(text: string) {
+    const trimmed = text.trim();
+    if (!trimmed || busy) {
+      return;
+    }
+    const conversationContext = buildConversationContext(turns);
+    setQuestion("");
+    void runTurn(trimmed, () =>
+      queryAskData({
+        question: trimmed,
+        session_id: persistenceAllowed ? activeSessionId : null,
+        conversation_context: conversationContext,
+      }),
+    );
+  }
+
+  function handleRunAgain(turnId: string, originalQuestion: string) {
+    if (!activeSessionId || busy || !persistenceAllowed) {
+      return;
+    }
+    const sessionId = activeSessionId;
+    void runTurn(originalQuestion, () => rerunSessionTurn(sessionId, turnId));
+  }
+
+  async function handleDownloadCsv(turn: SuccessTurn) {
+    let blob: Blob;
+    if (persistenceAllowed && activeSessionId && turn.response.persisted) {
+      try {
+        blob = await exportSessionTurnCsv(activeSessionId, turn.id);
+      } catch {
+        blob = buildCsvBlob(turn.response);
+      }
+    } else {
+      blob = buildCsvBlob(turn.response);
+    }
+    const url = window.URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `askdata-${turn.id}.csv`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    window.URL.revokeObjectURL(url);
+  }
+
+  async function refreshSessions(allowed: boolean) {
+    if (!allowed) {
       setSessions([]);
       return;
     }
-
     try {
-      const sessionSummaries = await fetchSessions();
-      setSessions(sessionSummaries);
+      setSessions(await fetchSessions());
     } catch {
-      // Keep the last known sidebar state if the history refresh fails.
+      // Keep the last known list if the refresh fails.
     }
   }
 
-  async function refreshExamplesAndSessions(persistenceAllowed: boolean) {
-    const [examples, sessionSummaries] = await Promise.all([
-      fetchExampleQuestions().catch(() => [] as ExampleQuestion[]),
-      persistenceAllowed
-        ? fetchSessions().catch(() => [] as SessionSummary[])
-        : Promise.resolve([] as SessionSummary[]),
-    ]);
-
-    const questions = normalizeExamples(examples);
-    if (questions.length > 0) {
-      setExamplePromptGroups(groupExamples(questions));
-    } else {
-      setExamplePromptGroups(groupExamples(fallbackPrompts));
-    }
-    setSessions(sessionSummaries);
-  }
-
-  async function refreshTargetState() {
+  async function afterTargetChange() {
     const sourceState = await fetchDataSources();
     setDataSources(sourceState);
     setSchemaRefreshKey((current) => current + 1);
-    return sourceState;
+    resetChat();
+    await refreshSessions(sourceState.active_target.persistence_allowed);
   }
 
-  function resetChatState() {
-    setActiveView("chat");
+  function resetChat() {
     setActiveSessionId(null);
     setQuestion("");
     setTurns([]);
   }
 
+  async function changeTarget(action: () => Promise<unknown>) {
+    setIsChangingTarget(true);
+    setTargetError(null);
+    try {
+      await action();
+      await afterTargetChange();
+    } catch (error) {
+      setTargetError(error instanceof Error ? error.message : "Switching the data failed.");
+    } finally {
+      setIsChangingTarget(false);
+    }
+  }
+
+  function handleSelectTarget(targetId: string) {
+    if (targetId === "demo_pagila" || targetId === "demo_retail_ops") {
+      void changeTarget(() => activateDemoDataSource(targetId));
+    }
+  }
+
+  function handleDisconnect() {
+    void changeTarget(() => disconnectRuntimeDataSource());
+  }
+
+  async function handleTestConnection(payload: RuntimePostgresConnectionInput): Promise<RuntimeConnectionTestResponse> {
+    return testRuntimePostgresConnection(payload);
+  }
+
+  async function handleConnect(payload: RuntimePostgresConnectionInput) {
+    setIsChangingTarget(true);
+    try {
+      await activateRuntimePostgresConnection(payload);
+      await afterTargetChange();
+      setActiveView("chat");
+    } finally {
+      setIsChangingTarget(false);
+    }
+  }
+
   async function handleSelectSession(sessionId: string) {
-    if (isLoading || !activeTarget?.persistence_allowed) {
+    if (busy || !persistenceAllowed) {
       return;
     }
-
     try {
       const session = await fetchSessionDetail(sessionId);
       setActiveView("chat");
@@ -230,251 +274,129 @@ export function QueryDashboard() {
       setQuestion("");
       setTurns(mapSessionDetailToTurns(session));
     } catch {
-      // Ignore failed restores and keep the current chat state.
+      // Keep the current conversation if the restore fails.
     }
-  }
-
-  function handleNewChat() {
-    if (isLoading) {
-      return;
-    }
-
-    resetChatState();
-  }
-
-  function handleSelectPrompt(prompt: string) {
-    setActiveView("chat");
-    setQuestion(prompt);
   }
 
   async function handleRenameSession() {
-    if (!activeSessionId || !activeTarget?.persistence_allowed) {
+    if (!activeSessionId || !persistenceAllowed) {
       return;
     }
-
-    const activeSession = sessions.find((session) => session.id === activeSessionId);
-    const nextTitle = window.prompt("Rename this session", activeSession?.title ?? "");
-    if (nextTitle == null) {
+    const current = sessions.find((session) => session.id === activeSessionId);
+    const nextTitle = window.prompt("New name for this question", current?.title ?? "")?.trim();
+    if (!nextTitle) {
       return;
     }
-
-    const normalizedTitle = nextTitle.trim();
-    if (!normalizedTitle) {
-      return;
-    }
-
     try {
-      const updatedSession = await renameSession(activeSessionId, normalizedTitle);
-      setSessions((currentSessions) =>
-        currentSessions.map((session) =>
-          session.id === updatedSession.id
-            ? {
-                ...session,
-                title: updatedSession.title,
-                updated_at: updatedSession.updated_at,
-              }
-            : session,
-        ),
+      const updated = await renameSession(activeSessionId, nextTitle);
+      setSessions((list) =>
+        list.map((session) => (session.id === updated.id ? { ...session, title: updated.title } : session)),
       );
     } catch {
-      // Keep the existing title if the rename fails.
+      // Keep the old name if the rename fails.
     }
   }
 
-  async function handleRerunTurn(turnId: string, originalQuestion: string) {
-    if (!activeSessionId || isLoading || !activeTarget?.persistence_allowed) {
+  function handleNewQuestion() {
+    if (busy) {
       return;
     }
-
-    const localTurnId = createTurnId();
     setActiveView("chat");
-    setIsLoading(true);
-    setTurns((currentTurns) => [
-      ...currentTurns,
-      {
-        id: localTurnId,
-        question: originalQuestion,
-        status: "loading",
-      },
-    ]);
-
-    try {
-      const result = await rerunSessionTurn(activeSessionId, turnId);
-      setTurns((currentTurns) =>
-        currentTurns.map((turn) =>
-          turn.id === localTurnId
-            ? {
-                id: result.turn_id ?? turn.id,
-                question: turn.question,
-                status: "success",
-                response: result,
-                created_at: result.created_at,
-              }
-            : turn,
-        ),
-      );
-      if (result.persisted) {
-        void refreshSessions();
-      }
-    } catch (error) {
-      const normalizedError = normalizeQueryError(error);
-      setTurns((currentTurns) =>
-        currentTurns.map((turn) =>
-          turn.id === localTurnId
-            ? {
-                id: normalizedError.turn_id ?? turn.id,
-                question: turn.question,
-                status: "error",
-                error: normalizedError,
-                created_at: normalizedError.created_at,
-              }
-            : turn,
-        ),
-      );
-      if (normalizedError.persisted) {
-        void refreshSessions();
-      }
-    } finally {
-      setIsLoading(false);
-    }
+    resetChat();
   }
 
-  async function handleExportTurn(turnId: string) {
-    if (!activeSessionId || !activeTarget?.persistence_allowed) {
-      return;
-    }
-
-    try {
-      const blob = await exportSessionTurnCsv(activeSessionId, turnId);
-      const url = window.URL.createObjectURL(blob);
-      const anchor = document.createElement("a");
-      anchor.href = url;
-      anchor.download = `askdata-${turnId}.csv`;
-      document.body.appendChild(anchor);
-      anchor.click();
-      anchor.remove();
-      window.URL.revokeObjectURL(url);
-    } catch {
-      // Keep the current view if export fails.
-    }
-  }
-
-  async function handleActivateDemoTarget(targetId: "demo_pagila" | "demo_retail_ops") {
-    await activateDemoDataSource(targetId);
-    const sourceState = await refreshTargetState();
-    resetChatState();
-    await refreshExamplesAndSessions(sourceState.active_target.persistence_allowed);
-  }
-
-  async function handleDisconnectRuntimeTarget() {
-    await disconnectRuntimeDataSource();
-    const sourceState = await refreshTargetState();
-    resetChatState();
-    await refreshExamplesAndSessions(sourceState.active_target.persistence_allowed);
-  }
-
-  async function handleTestRuntimeConnection(
-    payload: RuntimePostgresConnectionInput,
-  ): Promise<RuntimeConnectionTestResponse> {
-    return testRuntimePostgresConnection(payload);
-  }
-
-  async function handleActivateRuntimeConnection(payload: RuntimePostgresConnectionInput) {
-    await activateRuntimePostgresConnection(payload);
-    const sourceState = await refreshTargetState();
-    resetChatState();
-    await refreshExamplesAndSessions(sourceState.active_target.persistence_allowed);
-  }
+  const isEmptyChat = turns.length === 0;
 
   return (
-    <main
-      className={`grid h-[calc(100vh-2rem)] gap-4 md:h-[calc(100vh-2.5rem)] ${
-        sidebarCollapsed
-          ? "xl:grid-cols-[112px_minmax(0,1fr)]"
-          : "xl:grid-cols-[320px_minmax(0,1fr)] 2xl:grid-cols-[340px_minmax(0,1fr)]"
-      }`}
-    >
+    <div className="flex min-h-screen flex-col md:flex-row">
       <Sidebar
         activeView={activeView}
-        collapsed={sidebarCollapsed}
         onSelectView={setActiveView}
-        onToggleCollapse={() => setSidebarCollapsed((current) => !current)}
-        promptGroups={examplePromptGroups}
-        onNewChat={handleNewChat}
-        onSelectPrompt={handleSelectPrompt}
+        onNewQuestion={handleNewQuestion}
         sessions={sessions}
         activeSessionId={activeSessionId}
         onSelectSession={handleSelectSession}
         onRenameSession={handleRenameSession}
-        isLoading={isLoading}
+        busy={busy}
         activeTarget={activeTarget}
         demoTargets={dataSources?.demo_targets ?? []}
         runtimeTarget={dataSources?.runtime_target ?? null}
-        onActivateDemoTarget={handleActivateDemoTarget}
-        onDisconnectRuntimeTarget={handleDisconnectRuntimeTarget}
-        onTestRuntimeConnection={handleTestRuntimeConnection}
-        onActivateRuntimeConnection={handleActivateRuntimeConnection}
+        customDbAllowed={customDbAllowed}
+        onSelectTarget={handleSelectTarget}
+        onDisconnectRuntimeTarget={handleDisconnect}
+        targetError={targetError}
       />
 
-      <section className="panel flex h-full min-h-0 flex-col overflow-hidden">
-        {activeView === "chat" ? (
-          <>
-            <div className="min-h-0 flex-1">
-              <QueryWorkspace
-                turns={turns}
-                isLoading={isLoading}
-                allowTurnActions={Boolean(activeTarget?.persistence_allowed)}
-                onExportTurn={handleExportTurn}
-                onRerunTurn={handleRerunTurn}
-              />
-            </div>
+      <main className="flex min-w-0 flex-1 flex-col md:h-screen">
+        {activeView === "schema" ? (
+          <div className="flex flex-1 justify-center overflow-y-auto px-4 py-10 md:px-6">
+            <SchemaOverview
+              key={schemaRefreshKey}
+              targetName={activeTarget ? targetLabel(activeTarget) : "this database"}
+            />
+          </div>
+        ) : null}
 
-            <div className="border-t border-line bg-white/88 px-4 py-4 backdrop-blur md:px-5">
+        {activeView === "connect" && customDbAllowed ? (
+          <div className="flex flex-1 justify-center overflow-y-auto px-4 py-12 md:px-6">
+            <ConnectDatabase onTest={handleTestConnection} onConnect={handleConnect} />
+          </div>
+        ) : null}
+
+        {activeView === "chat" || (activeView === "connect" && !customDbAllowed) ? (
+          <>
+            <div
+              className={`flex flex-1 justify-center overflow-y-auto px-4 md:px-6 ${
+                isEmptyChat ? "items-center pb-6 pt-12" : "pb-6 pt-10"
+              }`}
+            >
+              {isEmptyChat ? (
+                <StartScreen copy={copy} disabled={busy} onAsk={ask} />
+              ) : (
+                <QueryWorkspace
+                  turns={turns}
+                  busy={busy}
+                  allowRunAgain={persistenceAllowed && Boolean(activeSessionId)}
+                  onAsk={ask}
+                  onRunAgain={handleRunAgain}
+                  onDownloadCsv={handleDownloadCsv}
+                />
+              )}
+            </div>
+            <div className="sticky bottom-0 flex justify-center bg-ground px-4 pb-6 pt-4 md:px-6">
               <QuestionForm
                 question={question}
-                isLoading={isLoading}
+                isLoading={busy}
+                placeholder={isEmptyChat ? copy.placeholder : copy.followUpPlaceholder}
+                helper={isEmptyChat ? "AskData only reads your data. When a question is unclear, it asks first." : null}
                 onQuestionChange={setQuestion}
-                onSubmit={handleSubmit}
+                onSubmit={() => ask(question)}
               />
             </div>
           </>
-        ) : (
-          <SchemaOverview
-            variant="embedded"
-            refreshKey={String(schemaRefreshKey)}
-            targetLabel={activeTarget?.display_name ?? "active"}
-          />
-        )}
-      </section>
-    </main>
+        ) : null}
+      </main>
+    </div>
   );
+}
+
+function buildCsvBlob(response: QueryResponse): Blob {
+  return new Blob([rowsToDelimited(response.columns, response.rows, ",")], { type: "text/csv;charset=utf-8" });
 }
 
 function normalizeQueryError(error: unknown): QueryErrorResponse {
   if (error instanceof ApiError) {
     return error.payload;
   }
-
-  if (isQueryErrorResponse(error)) {
-    return error;
-  }
-
-  if (error instanceof Error) {
-    return {
-      error: {
-        code: "frontend_error",
-        message: error.message,
-        details: {},
-      },
-      warnings: [],
-      persisted: false,
-    };
-  }
-
   return {
     error: {
       code: "frontend_error",
-      message: "An unexpected frontend error occurred.",
+      message:
+        error instanceof TypeError
+          ? "AskData can't reach its server. Check that the backend is running and try again."
+          : error instanceof Error
+            ? error.message
+            : "Something unexpected went wrong.",
       details: {},
     },
     warnings: [],
@@ -482,109 +404,24 @@ function normalizeQueryError(error: unknown): QueryErrorResponse {
   };
 }
 
-function isQueryErrorResponse(error: unknown): error is QueryErrorResponse {
-  if (!error || typeof error !== "object") {
-    return false;
-  }
-
-  const candidate = error as QueryErrorResponse;
-  return (
-    typeof candidate.error?.code === "string" &&
-    typeof candidate.error?.message === "string" &&
-    Array.isArray(candidate.warnings)
-  );
-}
-
-function normalizeExamples(examples: ExampleQuestion[]): string[] {
-  return examples
-    .map((example) => example.question.trim())
-    .filter((question) => question.length > 0);
-}
-
 function createTurnId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 function buildConversationContext(turns: ConversationTurn[]): ConversationMessage[] {
-  const resolvedTurns = turns.filter((turn) => turn.status === "success");
-  const recentTurns = resolvedTurns.slice(-3);
-
-  return recentTurns.flatMap((turn) => [
-    {
-      role: "user",
-      content: turn.question,
-    },
-    {
-      role: "assistant",
-      content: turn.response.answer_summary,
-    },
-  ]);
+  return turns
+    .filter((turn): turn is SuccessTurn => turn.status === "success")
+    .slice(-3)
+    .flatMap((turn) => [
+      { role: "user" as const, content: turn.question },
+      { role: "assistant" as const, content: turn.response.answer_summary },
+    ]);
 }
 
 function mapSessionDetailToTurns(session: SessionDetail): ConversationTurn[] {
-  return session.turns.map((turn) => {
-    if (turn.status === "success") {
-      return {
-        id: turn.id,
-        question: turn.question,
-        status: "success",
-        response: turn.response,
-        created_at: turn.created_at,
-      };
-    }
-
-    return {
-      id: turn.id,
-      question: turn.question,
-      status: "error",
-      error: turn.error,
-      created_at: turn.created_at,
-    };
-  });
-}
-
-function groupExamples(prompts: string[]): ExamplePromptGroup[] {
-  const groups: ExamplePromptGroup[] = [
-    { title: "Rankings", prompts: [] },
-    { title: "Time trends", prompts: [] },
-    { title: "Comparisons", prompts: [] },
-    { title: "Follow-ups", prompts: [] },
-  ];
-
-  for (const prompt of prompts) {
-    const normalizedPrompt = prompt.toLowerCase();
-    if (normalizedPrompt.includes("top ") || normalizedPrompt.includes("most")) {
-      groups[0].prompts.push(prompt);
-      continue;
-    }
-    if (
-      normalizedPrompt.includes("month") ||
-      normalizedPrompt.includes("year") ||
-      normalizedPrompt.includes("trend") ||
-      normalizedPrompt.includes("quarter")
-    ) {
-      groups[1].prompts.push(prompt);
-      continue;
-    }
-    if (
-      normalizedPrompt.includes("compare") ||
-      normalizedPrompt.includes("versus") ||
-      normalizedPrompt.includes("vs")
-    ) {
-      groups[2].prompts.push(prompt);
-      continue;
-    }
-    if (
-      normalizedPrompt.includes("now ") ||
-      normalizedPrompt.includes("only ") ||
-      normalizedPrompt.includes("group ")
-    ) {
-      groups[3].prompts.push(prompt);
-      continue;
-    }
-
-    groups[0].prompts.push(prompt);
-  }
-
-  return groups.filter((group) => group.prompts.length > 0);
+  return session.turns.map((turn) =>
+    turn.status === "success"
+      ? { id: turn.id, question: turn.question, status: "success", response: turn.response, created_at: turn.created_at }
+      : { id: turn.id, question: turn.question, status: "error", error: turn.error, created_at: turn.created_at },
+  );
 }

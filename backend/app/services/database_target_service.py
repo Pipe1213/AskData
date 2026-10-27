@@ -6,7 +6,9 @@ from psycopg import Error as PsycopgError
 
 from app.core.config import Settings, get_settings
 from app.core.exceptions import QueryPipelineError
+from app.core.masking import mask_secrets
 from app.db.connection import get_db_connection
+from app.db.role_safety import find_unsafe_role_privileges
 from app.db.metadata_models import DatabaseSchema
 from app.schemas.data_source import (
     DataSourceSummary,
@@ -81,6 +83,7 @@ class DatabaseTargetService:
         active_target = self.get_active_target(client_token)
         runtime_target = self._get_runtime_target_for_client(client_token)
         return DataSourcesResponse(
+            custom_db_allowed=self.settings.allow_custom_db,
             active_target=active_target.to_summary(is_active=True),
             demo_targets=[
                 target.to_summary(is_active=target.target_id == active_target.target_id)
@@ -156,6 +159,13 @@ class DatabaseTargetService:
         payload: RuntimePostgresConnectionInput,
     ) -> RuntimeConnectionTestResponse:
         del client_token
+        if not self.settings.allow_custom_db:
+            raise QueryPipelineError(
+                code="custom_db_disabled",
+                message="Connecting your own database is turned off on this AskData server.",
+                stage="target",
+                retryable=False,
+            )
         connection_settings = payload.to_connection_settings()
         try:
             return self._inspect_runtime_connection(
@@ -170,7 +180,7 @@ class DatabaseTargetService:
                 message="AskData could not connect to that PostgreSQL database.",
                 stage="target",
                 retryable=False,
-                details={"error": str(exc)},
+                details={"error": mask_secrets(str(exc), [payload.password])},
             ) from exc
 
     def activate_runtime_postgres_target(
@@ -192,7 +202,7 @@ class DatabaseTargetService:
                 message="AskData connected successfully but could not load the database schema.",
                 stage="schema",
                 retryable=False,
-                details={"error": str(exc)},
+                details={"error": mask_secrets(str(exc), [payload.password])},
             ) from exc
 
         runtime_target = ResolvedDatabaseTarget(
@@ -266,13 +276,17 @@ class DatabaseTargetService:
                     cursor.execute(
                         """
                         SELECT COUNT(*) AS table_count
-                        FROM information_schema.tables
-                        WHERE table_type = 'BASE TABLE'
-                          AND table_schema = ANY(%s)
+                        FROM pg_catalog.pg_class AS cls
+                        JOIN pg_catalog.pg_namespace AS ns
+                            ON ns.oid = cls.relnamespace
+                        WHERE cls.relkind IN ('r', 'p')
+                          AND NOT cls.relispartition
+                          AND ns.nspname = ANY(%s)
                         """,
                         (schema_allowlist,),
                     )
                     table_row = cursor.fetchone()
+                    role_problems = find_unsafe_role_privileges(cursor, schema_allowlist)
         except PsycopgError as exc:
             raise QueryPipelineError(
                 code="connection_test_failed",
@@ -280,10 +294,23 @@ class DatabaseTargetService:
                 stage="target",
                 retryable=False,
                 details={
-                    "error": str(exc),
+                    "error": mask_secrets(str(exc), [connection_settings.password]),
                     "sqlstate": getattr(exc, "sqlstate", None),
                 },
             ) from exc
+
+        if role_problems:
+            raise QueryPipelineError(
+                code="unsafe_database_role",
+                message=(
+                    f"AskData only connects with a read-only database user. User "
+                    f"'{connection_settings.user}' " + "; ".join(role_problems) + ". "
+                    "Create a user that can only read (see the README) and connect with it."
+                ),
+                stage="target",
+                retryable=False,
+                details={"problems": role_problems},
+            )
 
         table_count = int(table_row["table_count"] if table_row is not None else 0)
         if not visible_schemas:

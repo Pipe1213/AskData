@@ -2,171 +2,154 @@
 
 import { useEffect, useMemo, useState } from "react";
 
-import { SchemaTableList } from "@/components/schema/schema-table-list";
+import { ChevronDownIcon, ChevronUpIcon } from "@/components/ui/icons";
 import { fetchSchemaOverview } from "@/lib/api";
-import type { SchemaOverviewResponse } from "@/lib/types";
-
-type LoadState = "idle" | "loading" | "success" | "error";
+import type { SchemaOverviewResponse, SchemaTableSummary } from "@/lib/types";
 
 type SchemaOverviewProps = {
-  variant?: "page" | "embedded";
-  refreshKey?: string;
-  targetLabel?: string;
+  targetName: string;
 };
 
-export function SchemaOverview({
-  variant = "page",
-  refreshKey = "default",
-  targetLabel = "active",
-}: SchemaOverviewProps) {
-  const [schemaOverview, setSchemaOverview] = useState<SchemaOverviewResponse | null>(null);
-  const [loadState, setLoadState] = useState<LoadState>("idle");
+/** Loads once per mount; the parent remounts it (via `key`) when the data source changes. */
+export function SchemaOverview({ targetName }: SchemaOverviewProps) {
+  const [overview, setOverview] = useState<SchemaOverviewResponse | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [search, setSearch] = useState("");
 
   useEffect(() => {
     let isActive = true;
-
-    async function loadSchemaOverview() {
-      setLoadState("loading");
-      setErrorMessage(null);
-
-      try {
-        const response = await fetchSchemaOverview();
-        if (!isActive) {
-          return;
+    fetchSchemaOverview()
+      .then((response) => {
+        if (isActive) {
+          setOverview(response);
         }
-
-        setSchemaOverview(response);
-        setLoadState("success");
-      } catch (error) {
-        if (!isActive) {
-          return;
+      })
+      .catch((error: unknown) => {
+        if (isActive) {
+          setErrorMessage(error instanceof Error ? error.message : "The tables could not be loaded.");
         }
-
-        setLoadState("error");
-        setErrorMessage(
-          error instanceof Error
-            ? error.message
-            : "Failed to load the schema overview from the backend.",
-        );
-      }
-    }
-
-    void loadSchemaOverview();
-
+      });
     return () => {
       isActive = false;
     };
-  }, [refreshKey]);
+  }, []);
 
-  const filteredTables = useMemo(() => {
-    const tables = schemaOverview?.tables ?? [];
-    const normalizedSearch = search.trim().toLowerCase();
-
-    if (!normalizedSearch) {
-      return tables;
+  const tables = useMemo(() => {
+    const all = overview?.tables ?? [];
+    const term = search.trim().toLowerCase();
+    if (!term) {
+      return all;
     }
-
-    return tables.filter((table) => {
-      const haystack = [
-        table.name,
-        table.schema_name,
-        table.description ?? "",
-        ...table.columns.map((column) => column.name),
-      ]
+    return all.filter((table) =>
+      [table.name, table.description ?? "", ...table.columns.map((column) => column.name)]
         .join(" ")
-        .toLowerCase();
+        .toLowerCase()
+        .includes(term),
+    );
+  }, [overview, search]);
 
-      return haystack.includes(normalizedSearch);
-    });
-  }, [schemaOverview, search]);
+  const showSchemaNames = new Set((overview?.tables ?? []).map((table) => table.schema)).size > 1;
 
   return (
-    <div className={`h-full overflow-y-auto ${variant === "embedded" ? "px-4 py-5 md:px-6 md:py-6" : "space-y-6"}`}>
-      <section className={variant === "embedded" ? "border-b border-line pb-5" : "panel p-5 md:p-6"}>
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-          <div>
-            <div className="eyebrow">Live backend data</div>
-            <h2 className="section-title mt-4">Search the {targetLabel} schema</h2>
-            <p className="mt-3 text-sm leading-6 text-muted">
-              {variant === "embedded"
-                ? "This view is reading the real /schema/overview payload for the active target. Use search to narrow tables by name, description, or column names."
-                : "This page is reading the real /schema/overview payload for the active target. Use search to narrow tables by name, description, or column names."}
-            </p>
-          </div>
-          <div className="grid gap-3 sm:grid-cols-3 lg:w-[420px]">
-            <Metric label="State" value={loadState} />
-            <Metric
-              label="Tables"
-              value={String(schemaOverview?.tables.length ?? 0)}
-            />
-            <Metric
-              label="Visible"
-              value={String(filteredTables.length)}
-            />
-          </div>
-        </div>
-
-        <div className="mt-5">
-          <label className="block">
-            <span className="mb-2 block text-sm font-semibold text-ink">Search tables</span>
-            <input
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder="payment, rental, customer, amount..."
-              className="w-full rounded-[22px] border border-line bg-white px-4 py-3 text-sm leading-6 text-ink outline-none transition focus:border-accent"
-            />
-          </label>
-        </div>
-      </section>
-
-      {loadState === "loading" ? (
-        <section className={variant === "embedded" ? "pt-6" : "panel p-6"}>
-          <p className="text-sm leading-6 text-muted">
-            Loading schema metadata from the backend...
+    <div className="flex w-full max-w-conversation flex-col gap-5">
+      <div className="flex flex-col gap-2">
+        <h1 className="m-0 text-[28px] font-semibold tracking-[-0.02em]">Tables in {targetName}</h1>
+        {overview ? (
+          <p className="m-0 text-[15px] text-muted">
+            {overview.tables.length} tables. Open one to see its columns and links to other tables.
           </p>
-        </section>
-      ) : null}
-
-      {loadState === "error" ? (
-        <section className={variant === "embedded" ? "pt-6" : "panel p-6"}>
-          <div className="eyebrow">Schema error</div>
-          <h2 className="section-title mt-4">The schema overview could not be loaded</h2>
-          <p className="mt-3 text-sm leading-6 text-muted">
-            {errorMessage ?? "An unexpected schema-loading error occurred."}
-          </p>
-        </section>
-      ) : null}
-
-      {loadState === "success" && filteredTables.length === 0 ? (
-        <section className={variant === "embedded" ? "pt-6" : "panel p-6"}>
-          <div className="eyebrow">No matches</div>
-          <h2 className="section-title mt-4">No tables matched your search</h2>
-          <p className="mt-3 text-sm leading-6 text-muted">
-            Try a broader search term like <code>payment</code>, <code>customer</code>, or
-            <code> rental</code>.
-          </p>
-        </section>
-      ) : null}
-
-      <div className={variant === "embedded" ? "pt-6" : ""}>
-        {filteredTables.length > 0 ? <SchemaTableList tables={filteredTables} /> : null}
+        ) : null}
       </div>
+      <div className="flex flex-col gap-1.5">
+        <label htmlFor="table-search" className="text-sm font-medium">
+          Search tables and columns
+        </label>
+        <input
+          id="table-search"
+          type="search"
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+          className="h-11 w-full rounded-[10px] border border-inputLine bg-surface px-3 text-sm text-ink"
+        />
+      </div>
+
+      {errorMessage ? <p className="m-0 text-sm text-danger">{errorMessage}</p> : null}
+      {!overview && !errorMessage ? <p className="m-0 text-sm text-muted">Loading tables…</p> : null}
+      {overview && tables.length === 0 ? (
+        <p className="m-0 text-sm text-muted">No table or column matches “{search.trim()}”.</p>
+      ) : null}
+
+      {tables.length > 0 ? (
+        <ul className="m-0 flex list-none flex-col overflow-hidden rounded-[14px] border border-line bg-surface p-0">
+          {tables.map((table) => (
+            <SchemaRow key={`${table.schema}.${table.name}`} table={table} showSchema={showSchemaNames} />
+          ))}
+        </ul>
+      ) : null}
     </div>
   );
 }
 
-type MetricProps = {
-  label: string;
-  value: string;
-};
+function SchemaRow({ table, showSchema }: { table: SchemaTableSummary; showSchema: boolean }) {
+  const [open, setOpen] = useState(false);
+  const panelId = `table-${table.schema}-${table.name}`;
+  const foreignKeyByColumn = new Map(
+    table.foreign_keys.flatMap((key) =>
+      key.columns.map((column, index) => [
+        column,
+        `${key.references_table}.${key.references_columns[index] ?? key.references_columns[0] ?? ""}`,
+      ]),
+    ),
+  );
 
-function Metric({ label, value }: MetricProps) {
   return (
-    <div className="rounded-[22px] border border-line bg-white/80 px-4 py-3">
-      <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted">{label}</p>
-      <p className="mt-2 text-sm font-semibold text-ink">{value}</p>
-    </div>
+    <li className="border-b border-line last:border-b-0">
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-controls={panelId}
+        onClick={() => setOpen((current) => !current)}
+        className="flex min-h-[52px] w-full items-center gap-3 px-4 py-2 text-left hover:bg-ground"
+      >
+        <span className="flex min-w-0 flex-1 flex-col">
+          <span className="font-mono text-sm font-medium text-ink">
+            {showSchema ? `${table.schema}.` : ""}
+            {table.name}
+          </span>
+          {table.description ? <span className="truncate text-[13px] text-muted">{table.description}</span> : null}
+        </span>
+        <span className="shrink-0 text-[13px] text-muted">
+          {table.columns.length} {table.columns.length === 1 ? "column" : "columns"}
+        </span>
+        {open ? <ChevronUpIcon /> : <ChevronDownIcon />}
+      </button>
+      {open ? (
+        <div id={panelId} className="px-4 pb-4">
+          <table className="w-full border-collapse text-[13px]">
+            <thead className="sr-only">
+              <tr>
+                <th scope="col">Column</th>
+                <th scope="col">Type</th>
+                <th scope="col">Links to</th>
+              </tr>
+            </thead>
+            <tbody>
+              {table.columns.map((column) => (
+                <tr key={column.name} className="border-t border-line align-top">
+                  <td className="py-1.5 pr-3 font-mono text-ink">{column.name}</td>
+                  <td className="py-1.5 pr-3 text-muted">{column.data_type}</td>
+                  <td className="py-1.5 text-muted">
+                    {foreignKeyByColumn.has(column.name) ? `→ ${foreignKeyByColumn.get(column.name)}` : ""}
+                    {column.description ? (
+                      <span className="block text-inkSoft">{column.description}</span>
+                    ) : null}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
+    </li>
   );
 }
